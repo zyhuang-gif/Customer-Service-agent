@@ -1,0 +1,38 @@
+# ---- Claude / worktrees ----
+.claude/worktrees/
+CLAUDE.md
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+
+# ---- Node / 前端 ----
+node_modules/
+dist/
+.vite/
+*.local
+
+# ---- 环境与密钥 ----
+.env
+.env.*
+!.env.example
+
+# ---- 数据与向量库 ----
+*.sqlite3
+*.db
+chroma/
+chroma_db/
+data/postgres/
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
