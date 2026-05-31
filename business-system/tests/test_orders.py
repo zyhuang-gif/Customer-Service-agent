@@ -28,3 +28,15 @@ def test_list_orders_by_customer(client):
 def test_get_order_not_found(client):
     resp = client.get("/orders/NOPE")
     assert resp.status_code == 404
+
+
+def test_change_address(client):
+    _seed(client)
+    resp = client.patch("/orders/O1/address", json={"new_address": "上海浦东"})
+    assert resp.status_code == 200
+    assert resp.json()["address"] == "上海浦东"
+
+
+def test_change_address_not_found(client):
+    resp = client.patch("/orders/NOPE/address", json={"new_address": "上海"})
+    assert resp.status_code == 404
