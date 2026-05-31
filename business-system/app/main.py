@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.database import Base, engine
-from app.routers import customers, orders
+from app.routers import customers, logistics, orders
 
 
 @asynccontextmanager
@@ -20,6 +20,7 @@ app = FastAPI(title="业务系统服务", lifespan=lifespan)
 
 app.include_router(customers.router)
 app.include_router(orders.router)
+app.include_router(logistics.router)
 
 
 @app.get("/health/live")
