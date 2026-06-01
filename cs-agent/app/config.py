@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     business_timeout: float = 3.0
     business_retries: int = 1
 
+    # Postgres（agent schema 业务表 + LangGraph checkpointer 共用）
+    database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/cs"
+    agent_schema: str = "agent"
+
+    # 轻量登录 JWT
+    jwt_secret: str = "dev-secret-change-me"
+    jwt_expire_minutes: int = 720
+
     def key_for_embedding(self) -> str:
         return self.embedding_api_key or self.dashscope_api_key
 
