@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-v"
+markers = [
+    "integration: 需要真实 DASHSCOPE_API_KEY 的集成测试（无 key 时自动 skip）",
+]
