@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.ids import new_ticket_id
-from app.models import Ticket
+from app.models import Customer, Ticket
 from app.schemas import TicketCreate, TicketOut, TicketUpdate
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
@@ -18,6 +18,8 @@ def list_tickets(customer_id: str = Query(...), db: Session = Depends(get_db)):
 
 @router.post("", response_model=TicketOut, status_code=201)
 def create_ticket(body: TicketCreate, db: Session = Depends(get_db)):
+    if not db.get(Customer, body.customer_id):
+        raise HTTPException(status_code=404, detail="customer not found")
     tk = Ticket(
         id=new_ticket_id(),
         customer_id=body.customer_id,

@@ -43,3 +43,8 @@ def test_update_ticket_status_and_note(client):
 def test_update_ticket_not_found(client):
     resp = client.patch("/tickets/NOPE", json={"status": "已解决"})
     assert resp.status_code == 404
+
+
+def test_create_ticket_customer_not_found(client):
+    resp = client.post("/tickets", json={"customer_id": "NOPE", "category": "物流", "summary": "x"})
+    assert resp.status_code == 404

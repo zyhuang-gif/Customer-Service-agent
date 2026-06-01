@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -23,7 +23,7 @@ def get_refund_status(order_id: str = Query(...), db: Session = Depends(get_db))
 
 
 @router.post("", response_model=RefundOut, status_code=201)
-def create_refund(body: RefundCreate, response: Response, db: Session = Depends(get_db)):
+def create_refund(body: RefundCreate, db: Session = Depends(get_db)):
     if not db.get(Order, body.order_id):
         raise HTTPException(status_code=404, detail="order not found")
     rf = Refund(
