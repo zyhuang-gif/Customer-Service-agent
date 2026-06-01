@@ -70,3 +70,11 @@ def test_search_knowledge_no_hit_marks_uncovered():
     out = reg.call("search_knowledge", {"query": "未知问题"})
     assert out["covered"] is False
     assert out["hits"] == []
+
+
+def test_unknown_tool_returns_structured_error_not_raise():
+    # LLM 幻觉出不存在的工具名时，应返回结构化错误而非抛异常
+    out = _registry().call("nonexistent_tool", {"foo": "bar"})
+    assert out["error"] is True
+    assert out["kind"] == "bad_request"
+    assert "nonexistent_tool" in out["message"]

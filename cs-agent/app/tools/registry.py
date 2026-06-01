@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.errors import BusinessUnavailable, ToolError
-from app.tools.risk import RiskLevel, risk_of
+from app.tools.risk import TOOL_RISK, RiskLevel, risk_of
 from app.tools.schemas import PendingActionIntent
 
 
@@ -20,6 +20,9 @@ class ToolRegistry:
         self.retriever = retriever
 
     def call(self, tool_name: str, params: dict[str, Any]) -> dict[str, Any] | list:
+        # 未知工具名（如 LLM 幻觉）→ 返回结构化错误，绝不向上抛异常
+        if tool_name not in TOOL_RISK:
+            return ToolError("bad_request", f"未知工具：{tool_name}", {"tool_name": tool_name}).to_dict()
         level = risk_of(tool_name)
         if level == RiskLevel.HIGH_WRITE:
             return PendingActionIntent(tool_name=tool_name, params=params).to_dict()
