@@ -6,7 +6,12 @@
 
 **Architecture:** 独立 FastAPI 项目 `cs-agent/`，与 `business-system/` 平级。本层是纯"能力"代码：工具层是访问外部的唯一出口，只读/低风险工具直接执行，高风险工具只产出一个"待确认意图"对象（不执行、不碰 LLM）。业务系统通过 HTTP 调用（httpx），检索通过百炼（DashScope）云端 embedding + rerank。所有外部依赖（业务系统 HTTP、DashScope）都封装在独立 client 后面，单测用 mock，不依赖网络与运行中的服务。
 
-**Tech Stack:** Python 3.14、FastAPI、httpx（调业务系统 + DashScope）、chromadb（本地持久化向量库）、pydantic v2 + pydantic-settings、pytest + respx（mock httpx）。
+**Tech Stack:** **Python 3.13（用 uv 管理）**、FastAPI、httpx（调业务系统 + DashScope）、chromadb（本地持久化向量库）、pydantic v2 + pydantic-settings、pytest + respx（mock httpx）。
+
+> **环境关键约定（实测踩坑后确定）：**
+> - cs-agent **必须用 Python 3.13 + uv**，不能用 3.14。原因：`chromadb` 的依赖 `tokenizers`（Rust/pyo3 绑定）在 Python 3.14 下无法编译安装。3.13 有成熟预编译 wheel。business-system 不受影响（它无此依赖，继续 3.14）。
+> - 建 venv 与装依赖用 uv：`uv venv --python 3.13 .venv` 然后 `uv pip install --python .venv\Scripts\python.exe -r requirements.txt`。
+> - **respx 0.21.x 的 `@respx.mock` 全局 patch 在本环境下不生效**（httpcore 1.0.9 下 patch 静默失败）。改用 **transport 注入**：客户端构造函数加 `transport: httpx.BaseTransport | None = None` 参数（仅测试注入），生产传 None 用默认传输；测试用 `respx.MockRouter(assert_all_called=False)` + `httpx.MockTransport(router.handler)`。功能契约（重试次数、404→None、异常语义）完全不变。客户端内部用 `httpx.Client(transport=...)` 而非模块级 `httpx.request`。
 
 ---
 
