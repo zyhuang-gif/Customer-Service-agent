@@ -11,32 +11,40 @@ now = datetime.utcnow
 
 
 def seed(db: Session) -> None:
+    # 先插入父表（客户、订单）并 flush，确保子表的外键有依据。
+    # 注意：模型只声明了 ForeignKey 列、未配 relationship，SQLAlchemy 不会自动
+    # 排序父子插入顺序；Postgres 启用外键约束时必须显式保证先父后子（SQLite 默认
+    # 不校验外键，所以单测发现不了，必须连真库才暴露）。
+
     # 客户：普通客户 + 高风险投诉客户
     c_normal = Customer(id="C1001", name="张三", phone="13800000001", member_level="金")
     c_risk = Customer(id="C1002", name="李四", phone="13800000002", member_level="普通")
     db.add_all([c_normal, c_risk])
 
-    # 剧情①：正常已签收
+    # 三个订单（剧情①②③的父行）
     db.add(Order(id="20260531001", customer_id="C1001", status="已签收",
                  items=[{"name": "运动鞋", "qty": 1}], amount=299.0, address="北京朝阳",
                  created_at=now() - timedelta(days=10), shipped_at=now() - timedelta(days=8)))
+    db.add(Order(id="20260531002", customer_id="C1001", status="已发货",
+                 items=[{"name": "蓝牙耳机", "qty": 1}], amount=499.0, address="北京朝阳",
+                 created_at=now() - timedelta(days=5), shipped_at=now() - timedelta(days=4)))
+    db.add(Order(id="20260531003", customer_id="C1001", status="已取消",
+                 items=[{"name": "保温杯", "qty": 2}], amount=158.0, address="北京朝阳",
+                 created_at=now() - timedelta(days=12)))
+    db.flush()  # 父行落库，下面的子表外键才有效
+
+    # 剧情①：正常已签收
     db.add(Logistics(id="LG001", order_id="20260531001", carrier="顺丰", tracking_no="SF0001",
                      status="已签收", last_update=now() - timedelta(days=6),
                      traces=[{"time": "2026-05-23", "desc": "已签收"}]))
 
     # 剧情②：物流停滞 3 天（已发货但 3 天未更新）
-    db.add(Order(id="20260531002", customer_id="C1001", status="已发货",
-                 items=[{"name": "蓝牙耳机", "qty": 1}], amount=499.0, address="北京朝阳",
-                 created_at=now() - timedelta(days=5), shipped_at=now() - timedelta(days=4)))
     db.add(Logistics(id="LG002", order_id="20260531002", carrier="圆通", tracking_no="YT0002",
                      status="运输中", last_update=now() - timedelta(days=3),
                      eta=now() - timedelta(days=1),
                      traces=[{"time": "2026-05-28", "desc": "到达转运中心后无更新"}]))
 
     # 剧情③：退款 5 天未到账（退款处理中超 5 天）
-    db.add(Order(id="20260531003", customer_id="C1001", status="已取消",
-                 items=[{"name": "保温杯", "qty": 2}], amount=158.0, address="北京朝阳",
-                 created_at=now() - timedelta(days=12)))
     db.add(Refund(id=new_refund_id(), order_id="20260531003", status="处理中",
                   amount=158.0, reason="七天无理由", applied_at=now() - timedelta(days=5)))
 

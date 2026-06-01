@@ -1,6 +1,7 @@
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
-sqlalchemy==2.0.36
+# sqlalchemy==2.0.36  # 2.0.36 在 Python 3.14 下建模型时崩（Union 类型解析 bug），需 >=2.0.50
+sqlalchemy>=2.0.50
 # pydantic==2.10.3  # Python 3.14 无预编译 wheel（pydantic-core 构建失败），放宽至最新兼容版
 pydantic==2.13.4
 # pydantic-settings==2.6.1 依赖 pydantic>=2.7.0，与 2.13.4 兼容
