@@ -132,10 +132,15 @@ BUSINESS_BASE_URL=http://localhost:8100
 
 # 阿里云百炼 DashScope（OpenAI 兼容）
 # 注意：真实 key 只写进 .env（已被 .gitignore 忽略），此样例文件保持空值
+# 三个模型可分别授权不同 key；留空的项会回落到 DASHSCOPE_API_KEY
 DASHSCOPE_API_KEY=
 DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 EMBEDDING_MODEL=text-embedding-v4
+EMBEDDING_API_KEY=
 RERANK_MODEL=qwen3-rerank
+RERANK_API_KEY=
+CHAT_MODEL=qwen3-max
+CHAT_API_KEY=
 
 # 检索参数
 RETRIEVE_TOP_N=10
@@ -160,10 +165,24 @@ class Settings(BaseSettings):
 
     business_base_url: str = "http://localhost:8100"
 
-    dashscope_api_key: str = ""
+    dashscope_api_key: str = ""  # 默认 key，下面各项缺省回落到它
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     embedding_model: str = "text-embedding-v4"
     rerank_model: str = "qwen3-rerank"
+    chat_model: str = "qwen3-max"
+    # 按模型分开授权的 key（百炼可对不同模型签发不同 key）；留空则回落到 dashscope_api_key
+    embedding_api_key: str = ""
+    rerank_api_key: str = ""
+    chat_api_key: str = ""
+
+    def key_for_embedding(self) -> str:
+        return self.embedding_api_key or self.dashscope_api_key
+
+    def key_for_rerank(self) -> str:
+        return self.rerank_api_key or self.dashscope_api_key
+
+    def key_for_chat(self) -> str:
+        return self.chat_api_key or self.dashscope_api_key
 
     retrieve_top_n: int = 10
     retrieve_top_k: int = 3
@@ -507,8 +526,8 @@ def test_embed_texts_returns_vectors():
             ]
         })
     )
-    c = DashScopeClient(api_key="k", base_url=EMB_BASE, rerank_url=RERANK_URL,
-                        embedding_model="m", rerank_model="r")
+    c = DashScopeClient(embedding_api_key="k", rerank_api_key="k", base_url=EMB_BASE,
+                        rerank_url=RERANK_URL, embedding_model="m", rerank_model="r")
     vecs = c.embed_texts(["a", "b"])
     assert len(vecs) == 2
     assert vecs[0] == [0.1, 0.2, 0.3]
@@ -519,8 +538,8 @@ def test_embed_single_query():
     respx.post(f"{EMB_BASE}/embeddings").mock(
         return_value=httpx.Response(200, json={"data": [{"embedding": [1.0, 0.0], "index": 0}]})
     )
-    c = DashScopeClient(api_key="k", base_url=EMB_BASE, rerank_url=RERANK_URL,
-                        embedding_model="m", rerank_model="r")
+    c = DashScopeClient(embedding_api_key="k", rerank_api_key="k", base_url=EMB_BASE,
+                        rerank_url=RERANK_URL, embedding_model="m", rerank_model="r")
     v = c.embed_query("hello")
     assert v == [1.0, 0.0]
 
@@ -536,8 +555,8 @@ def test_rerank_returns_sorted_indices_and_scores():
             ]}
         })
     )
-    c = DashScopeClient(api_key="k", base_url=EMB_BASE, rerank_url=RERANK_URL,
-                        embedding_model="m", rerank_model="r")
+    c = DashScopeClient(embedding_api_key="k", rerank_api_key="k", base_url=EMB_BASE,
+                        rerank_url=RERANK_URL, embedding_model="m", rerank_model="r")
     results = c.rerank("query", ["d0", "d1", "d2"], top_k=2)
     # 返回按分数降序的 (index, score)，截断到 top_k
     assert results == [(2, 0.9), (0, 0.5)]
@@ -565,28 +584,31 @@ DEFAULT_RERANK_URL = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text
 class DashScopeClient:
     def __init__(
         self,
-        api_key: str | None = None,
+        embedding_api_key: str | None = None,
+        rerank_api_key: str | None = None,
         base_url: str | None = None,
         rerank_url: str | None = None,
         embedding_model: str | None = None,
         rerank_model: str | None = None,
         timeout: float = 10.0,
     ):
-        self.api_key = api_key if api_key is not None else settings.dashscope_api_key
+        # embedding 与 rerank 可用不同的 key（百炼分模型授权）；缺省回落到默认 key
+        self.embedding_api_key = embedding_api_key if embedding_api_key is not None else settings.key_for_embedding()
+        self.rerank_api_key = rerank_api_key if rerank_api_key is not None else settings.key_for_rerank()
         self.base_url = (base_url or settings.dashscope_base_url).rstrip("/")
         self.rerank_url = rerank_url or DEFAULT_RERANK_URL
         self.embedding_model = embedding_model or settings.embedding_model
         self.rerank_model = rerank_model or settings.rerank_model
         self.timeout = timeout
 
-    @property
-    def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+    @staticmethod
+    def _headers(api_key: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         resp = httpx.post(
             f"{self.base_url}/embeddings",
-            headers=self._headers,
+            headers=self._headers(self.embedding_api_key),
             json={"model": self.embedding_model, "input": texts},
             timeout=self.timeout,
         )
@@ -600,7 +622,7 @@ class DashScopeClient:
     def rerank(self, query: str, documents: list[str], top_k: int) -> list[tuple[int, float]]:
         resp = httpx.post(
             self.rerank_url,
-            headers=self._headers,
+            headers=self._headers(self.rerank_api_key),
             json={
                 "model": self.rerank_model,
                 "input": {"query": query, "documents": documents},
