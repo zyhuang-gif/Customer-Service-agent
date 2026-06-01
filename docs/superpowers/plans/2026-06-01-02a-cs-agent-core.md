@@ -30,7 +30,7 @@
 | POST | `/coupons` | `{"customer_id","value","reason"}` | CouponOut(201)；404 customer not found |
 
 **关键技术决策**（已与用户确认）：
-- LLM/embedding/rerank 提供方：**阿里云百炼 DashScope**（OpenAI 兼容）。embedding 用 `text-embedding-v3`，rerank 用 `gte-rerank-v2`。
+- LLM/embedding/rerank 提供方：**阿里云百炼 DashScope**（OpenAI 兼容）。embedding 用 `text-embedding-v4`（实测 1024 维），rerank 用 `qwen3-rerank`，chat（②b 用）用 `qwen3-max`。**以上模型名与端点均已用真实 key 实测可用、返回格式与本计划假设一致。**
 - 检索第一版**一步到位含 rerank**：embedding → Chroma 向量召回 top-N → rerank 精排 top-K → 带引用出处返回。
 - 本层**不接 LLM 推理**；DashScope 只用于 embedding 与 rerank，且封装在 client 后，单测 mock。
 - 真实检索集成需要 `.env` 配 `DASHSCOPE_API_KEY`；无 key 时单测照常全过（mock），仅"真实集成测试"会 skip。
@@ -131,10 +131,11 @@ markers = [
 BUSINESS_BASE_URL=http://localhost:8100
 
 # 阿里云百炼 DashScope（OpenAI 兼容）
+# 注意：真实 key 只写进 .env（已被 .gitignore 忽略），此样例文件保持空值
 DASHSCOPE_API_KEY=
 DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-EMBEDDING_MODEL=text-embedding-v3
-RERANK_MODEL=gte-rerank-v2
+EMBEDDING_MODEL=text-embedding-v4
+RERANK_MODEL=qwen3-rerank
 
 # 检索参数
 RETRIEVE_TOP_N=10
@@ -161,8 +162,8 @@ class Settings(BaseSettings):
 
     dashscope_api_key: str = ""
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    embedding_model: str = "text-embedding-v3"
-    rerank_model: str = "gte-rerank-v2"
+    embedding_model: str = "text-embedding-v4"
+    rerank_model: str = "qwen3-rerank"
 
     retrieve_top_n: int = 10
     retrieve_top_k: int = 3
@@ -188,7 +189,7 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 .venv\Scripts\python.exe -c "from app.config import settings; print('ok', settings.embedding_model, settings.retrieve_top_k)"
 ```
-Expected: 打印 `ok text-embedding-v3 3`，无导入错误。
+Expected: 打印 `ok text-embedding-v4 3`，无导入错误。
 
 - [ ] **Step 6: 提交**
 
