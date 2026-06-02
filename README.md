@@ -2,7 +2,7 @@
 
 智能售后客服 Agent 工作台。目标不是做一个只会聊天的机器人，而是做一个能查询业务系统、调用工具、遇到高风险动作自动暂停并交给坐席确认的售后处理系统。
 
-当前 `master` 已完成两个后端服务与 Agent 后端深度能力；Vue 前端仍在独立工作线待合并。
+当前 `master` 已完成两个后端服务、Agent 后端深度能力，以及 Vue 前端（客户聊天端 + 坐席工作台），`docker-compose up` 可一键起全栈。
 
 ## 架构
 
@@ -129,9 +129,20 @@ python eval\run_eval.py --base-url http://localhost:8000
 
 这个脚本是轻量冒烟评测，适合验证真实服务链路是否还能跑通；更细的答案质量评分可以在此基础上扩展。
 
+## 前端（web）
+
+Vite + Vue3 + Element Plus，两个核心页面：
+
+- **客户聊天端** `/chat`：SSE 流式对话，AI 回复带知识库引用出处。
+- **坐席工作台** `/agent-desk`（需登录，演示账号 `agent/agent123`）：三栏布局——会话列表 / 对话流 / 待确认动作卡片，坐席可对高风险动作（退款、改地址、发券）确认或驳回。
+
+本地开发：`cd web && npm install && npm run dev`（5173）；组件单测 `npm run test`。
+容器部署：已纳入 `docker-compose.yml`（web 服务映射 `5173:80`）。
+
+> 端到端联调验证（真实 Postgres + qwen3-max 跑通人在环路）见 `docs/verification/2026-06-02-e2e-human-in-the-loop.md`。
+
 ## 当前交付缺口
 
-- Vue 前端在独立工作线，尚未合并到 `master`。
-- `docker-compose.yml` 目前覆盖 Postgres + 两个后端；前端合并后再加入 web 服务。
+- 数据看板前端页（后端 `/dashboard` 已就绪，前端页待补）。
 - README 演示截图、架构图、完整 API 文档仍待补齐。
 - 评测脚本是第一版链路评测，尚未加入 LLM judge 或人工标注分。
