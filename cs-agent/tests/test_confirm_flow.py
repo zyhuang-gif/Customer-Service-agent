@@ -3,7 +3,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from app.agent.graph import build_graph
 from app.agent.service import ConversationService
-from app.models import Conversation, PendingAction
+from app.models import Conversation, Message, PendingAction
 
 
 class HighRiskLLM:
@@ -95,10 +95,14 @@ def test_reject_marks_rejected_and_no_business_call(db_session):
     svc, biz = _service(db_session)
     svc.start_turn("c1", "给我退款")
     pa = db_session.query(PendingAction).filter_by(conversation_id="c1").one()
-    svc.resume_action(pa.id, approved=False, reviewer_id=1)
+    out = svc.resume_action(pa.id, approved=False, reviewer_id=1)
     assert biz.refunded is None
     db_session.refresh(pa)
     assert pa.status == "rejected"
+    assert out["message"] == "坐席已驳回该操作申请，未执行退款、改地址或发券。建议先为您转人工继续处理，或改为创建普通工单跟进。"
+    last_message = db_session.query(Message).filter_by(conversation_id="c1").order_by(Message.id.desc()).first()
+    assert last_message.role == "ai"
+    assert last_message.content == out["message"]
 
 
 def test_double_confirm_is_idempotent(db_session):

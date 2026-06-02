@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/client'
 import { useAuthStore } from '../stores/auth'
@@ -12,6 +12,7 @@ const conversations = ref([])
 const activeId = ref('')
 const messages = ref([])
 const pendingActions = ref([])
+let refreshTimer = 0
 
 async function loadConversations() {
   conversations.value = await api('/conversations', { token: auth.token })
@@ -19,6 +20,13 @@ async function loadConversations() {
 
 async function loadPending() {
   pendingActions.value = await api('/pending-actions', { token: auth.token })
+}
+
+async function refreshDesk() {
+  await Promise.all([loadConversations(), loadPending()])
+  if (activeId.value) {
+    messages.value = await api(`/conversations/${activeId.value}/messages`, { token: auth.token })
+  }
 }
 
 async function selectConversation(id) {
@@ -40,8 +48,12 @@ async function onReview({ id, approved }) {
 }
 
 onMounted(() => {
-  loadConversations()
-  loadPending()
+  refreshDesk()
+  refreshTimer = window.setInterval(refreshDesk, 3000)
+})
+
+onUnmounted(() => {
+  if (refreshTimer) window.clearInterval(refreshTimer)
 })
 </script>
 

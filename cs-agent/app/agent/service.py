@@ -201,7 +201,11 @@ class ConversationService:
             self.db.commit()
             audit(self.db, actor=str(reviewer_id), action_type="reject", conversation_id=pa.conversation_id,
                   tool_name=pa.tool_name, params=pa.params, status="rejected")
-            resume_payload = {"approved": False}
+            ai_text = "坐席已驳回该操作申请，未执行退款、改地址或发券。建议先为您转人工继续处理，或改为创建普通工单跟进。"
+            self.db.add(Message(conversation_id=pa.conversation_id, role="ai", content=ai_text))
+            conv.status = "ai_handling"
+            self.db.commit()
+            return {"status": conv.status, "pending_status": pa.status, "message": ai_text}
         else:
             executor = _EXECUTORS[pa.tool_name]
             try:
