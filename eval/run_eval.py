@@ -32,6 +32,135 @@ def post_json(url: str, body: dict, timeout: float) -> str:
         return resp.read().decode("utf-8")
 
 
+def expectation(case: dict) -> dict:
+    expect = dict(case.get("expect") or {})
+    if "event_types" not in expect and "expect_event_types" in case:
+        expect["event_types"] = case["expect_event_types"]
+    return expect
+
+
+def event_types(events: list[dict]) -> list[str | None]:
+    return [event.get("type") for event in events]
+
+
+def event_text(events: list[dict]) -> str:
+    parts = []
+    for event in events:
+        for key in ("content", "message", "text"):
+            if event.get(key):
+                parts.append(str(event[key]))
+    return "\n".join(parts)
+
+
+def extract_tools(events: list[dict]) -> list[str]:
+    tools: list[str] = []
+    for event in events:
+        if event.get("tool_name"):
+            tools.append(event["tool_name"])
+        for key in ("tool_calls", "tools", "steps"):
+            value = event.get(key)
+            if not isinstance(value, list):
+                continue
+            for item in value:
+                if isinstance(item, str):
+                    tools.append(item)
+                elif isinstance(item, dict):
+                    name = item.get("name") or item.get("tool_name")
+                    if name:
+                        tools.append(name)
+    return tools
+
+
+def actual_outcome(events: list[dict]) -> dict:
+    seen = event_types(events)
+    text = event_text(events)
+    awaiting = "awaiting_confirmation" in seen
+    handoff = (
+        "handoff" in seen
+        or "human_handling" in seen
+        or "转接人工" in text
+        or "人工客服" in text
+    )
+    return {
+        "event_types": seen,
+        "tools": extract_tools(events),
+        "ai_resolution": "response" in seen and not awaiting and not handoff,
+        "handoff": handoff,
+        "knowledge_hit": any(
+            event.get("citations") or event.get("references") or event.get("knowledge_hit")
+            for event in events
+        ) or any(marker in text for marker in ("政策", "知识库", "售后规则", "根据")),
+        "awaiting_confirmation": awaiting,
+    }
+
+
+def evaluate_case(case: dict, events: list[dict]) -> dict:
+    expect = expectation(case)
+    actual = actual_outcome(events)
+    expected_events = expect.get("event_types", [])
+    missing = [item for item in expected_events if item not in actual["event_types"]]
+    expected_tools = expect.get("tools", [])
+    high_risk_tools = expect.get("high_risk_tools", [])
+
+    observed_tools = set(actual["tools"])
+    if expected_tools and observed_tools:
+        tool_call_correct = all(tool in observed_tools for tool in expected_tools)
+    elif high_risk_tools:
+        tool_call_correct = actual["awaiting_confirmation"]
+    elif "transfer_to_human" in expected_tools:
+        tool_call_correct = actual["handoff"]
+    elif "search_knowledge" in expected_tools and "knowledge_hit" in expect:
+        tool_call_correct = actual["knowledge_hit"] == expect["knowledge_hit"]
+    else:
+        tool_call_correct = True
+
+    high_risk_misexecuted = bool(high_risk_tools) and not actual["awaiting_confirmation"]
+    intent_correct = not missing and not high_risk_misexecuted
+
+    checks = [
+        not missing,
+        intent_correct,
+        tool_call_correct,
+        not high_risk_misexecuted,
+    ]
+    for key in ("ai_resolution", "handoff", "knowledge_hit"):
+        if key in expect:
+            checks.append(actual[key] == expect[key])
+
+    return {
+        "id": case["id"],
+        "passed": all(checks),
+        "intent": expect.get("intent", ""),
+        "intent_correct": intent_correct,
+        "tool_call_correct": tool_call_correct,
+        "expected_tools": expected_tools,
+        "observed_tools": actual["tools"],
+        "seen_event_types": actual["event_types"],
+        "missing_event_types": missing,
+        "actual_ai_resolution": actual["ai_resolution"],
+        "actual_handoff": actual["handoff"],
+        "actual_knowledge_hit": actual["knowledge_hit"],
+        "high_risk_misexecuted": high_risk_misexecuted,
+    }
+
+
+def _rate(count: int, total: int) -> float:
+    return round(count / total, 4) if total else 0.0
+
+
+def build_metrics(results: list[dict]) -> dict:
+    total = len(results)
+    return {
+        "case_pass_rate": _rate(sum(1 for r in results if r["passed"]), total),
+        "intent_accuracy": _rate(sum(1 for r in results if r["intent_correct"]), total),
+        "tool_call_accuracy": _rate(sum(1 for r in results if r["tool_call_correct"]), total),
+        "ai_resolution_rate": _rate(sum(1 for r in results if r["actual_ai_resolution"]), total),
+        "handoff_rate": _rate(sum(1 for r in results if r["actual_handoff"]), total),
+        "knowledge_hit_rate": _rate(sum(1 for r in results if r["actual_knowledge_hit"]), total),
+        "high_risk_misexecution_count": sum(1 for r in results if r["high_risk_misexecuted"]),
+    }
+
+
 def run_case(base_url: str, case: dict, timeout: float) -> dict:
     body = {
         "customer_ref": case["customer_ref"],
@@ -39,14 +168,7 @@ def run_case(base_url: str, case: dict, timeout: float) -> dict:
     }
     raw = post_json(f"{base_url.rstrip('/')}/chat", body, timeout)
     events = parse_sse(raw)
-    seen = [event.get("type") for event in events]
-    missing = [event for event in case["expect_event_types"] if event not in seen]
-    return {
-        "id": case["id"],
-        "passed": not missing,
-        "seen_event_types": seen,
-        "missing_event_types": missing,
-    }
+    return evaluate_case(case, events)
 
 
 def main() -> int:
@@ -65,13 +187,28 @@ def main() -> int:
             results.append({
                 "id": case["id"],
                 "passed": False,
+                "intent": expectation(case).get("intent", ""),
+                "intent_correct": False,
+                "tool_call_correct": False,
+                "expected_tools": expectation(case).get("tools", []),
+                "observed_tools": [],
                 "seen_event_types": [],
-                "missing_event_types": case["expect_event_types"],
+                "missing_event_types": expectation(case).get("event_types", []),
+                "actual_ai_resolution": False,
+                "actual_handoff": False,
+                "actual_knowledge_hit": False,
+                "high_risk_misexecuted": False,
                 "error": str(exc),
             })
 
     passed = sum(1 for result in results if result["passed"])
-    print(json.dumps({"passed": passed, "total": len(results), "results": results}, ensure_ascii=False, indent=2))
+    report = {
+        "passed": passed,
+        "total": len(results),
+        "metrics": build_metrics(results),
+        "results": results,
+    }
+    print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if passed == len(results) else 1
 
 
