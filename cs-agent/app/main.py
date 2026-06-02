@@ -1,9 +1,16 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import Base, get_engine
-from app.routers import auth_router, chat_router, confirm_router, dashboard_router
+from app.routers import (
+    auth_router,
+    chat_router,
+    confirm_router,
+    conversation_router,
+    dashboard_router,
+)
 
 
 @asynccontextmanager
@@ -16,9 +23,19 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="客服 Agent 服务", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(auth_router.router)
 app.include_router(chat_router.router)
 app.include_router(confirm_router.router)
+app.include_router(conversation_router.router)
 app.include_router(dashboard_router.router)
 
 
