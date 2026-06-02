@@ -14,15 +14,18 @@ from app.retrieval.retriever import Retriever
 from app.tools.registry import ToolRegistry
 
 _checkpointer = None
+_checkpointer_cm = None  # 持有 contextmanager，保证应用生命周期内连接不被回收
 
 
 def _get_checkpointer():
-    global _checkpointer
+    global _checkpointer, _checkpointer_cm
     if _checkpointer is None:
         from langgraph.checkpoint.postgres import PostgresSaver
         conn = settings.database_url.replace("+psycopg", "")
-        cm = PostgresSaver.from_conn_string(conn)
-        _checkpointer = cm.__enter__()
+        # from_conn_string 是 contextmanager：必须持有 cm 引用，否则连接被 GC 关闭。
+        # 单例存活于整个应用生命周期；进程退出时由 OS 回收连接。
+        _checkpointer_cm = PostgresSaver.from_conn_string(conn)
+        _checkpointer = _checkpointer_cm.__enter__()
         _checkpointer.setup()
     return _checkpointer
 

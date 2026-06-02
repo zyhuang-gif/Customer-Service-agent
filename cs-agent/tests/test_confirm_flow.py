@@ -95,3 +95,9 @@ def test_double_confirm_is_idempotent(db_session):
     out = svc.resume_action(pa.id, approved=True, reviewer_id=1)
     assert out["status"] == "noop"
     assert biz.refunded is None
+
+
+def test_resume_nonexistent_action_returns_not_found(db_session):
+    svc, _ = _service(db_session)
+    out = svc.resume_action(99999, approved=True, reviewer_id=1)
+    assert out["status"] == "not_found"

@@ -58,6 +58,8 @@ class ConversationService:
 
     def resume_action(self, pending_action_id: int, approved: bool, reviewer_id: int) -> dict[str, Any]:
         pa = self.db.get(PendingAction, pending_action_id)
+        if pa is None:
+            return {"status": "not_found", "message": "待确认动作不存在"}
         # 幂等守护：非 pending 状态直接返回，防止重复退款/发券
         if pa.status != "pending":
             return {"status": "noop", "pending_status": pa.status, "message": "该操作已处理，请勿重复提交。"}

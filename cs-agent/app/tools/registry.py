@@ -31,6 +31,8 @@ class ToolRegistry:
             return handler(params)
         except BusinessUnavailable as exc:
             return ToolError("upstream_unavailable", "业务系统暂时不可用，正在为您转人工", exc.details).to_dict()
+        except Exception as exc:  # noqa: BLE001 兜底：任何工具内部异常都转结构化错误，绝不向上抛、绝不让 Agent 崩
+            return ToolError("internal", "处理时发生内部错误，正在为您转人工", {"cause": str(exc)}).to_dict()
 
     # ---- 只读工具 ----
     def _tool_search_knowledge(self, params):

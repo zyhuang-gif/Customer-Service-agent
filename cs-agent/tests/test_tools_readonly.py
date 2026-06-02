@@ -78,3 +78,14 @@ def test_unknown_tool_returns_structured_error_not_raise():
     assert out["error"] is True
     assert out["kind"] == "bad_request"
     assert "nonexistent_tool" in out["message"]
+
+
+def test_tool_internal_exception_returns_structured_error():
+    # 工具内部抛非 BusinessUnavailable 异常时，应兜底为结构化错误而非穿透
+    class BoomBusiness:
+        def get_order(self, order_id):
+            raise ValueError("boom")
+    reg = ToolRegistry(business=BoomBusiness(), retriever=FakeRetriever([]))
+    out = reg.call("get_order", {"order_id": "O1"})
+    assert out["error"] is True
+    assert out["kind"] == "internal"
