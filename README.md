@@ -6,20 +6,73 @@
 
 ## 架构
 
-```text
-customer / agent UI
-        |
-        | HTTP / SSE
-        v
-cs-agent (FastAPI + LangGraph + retrieval + audit)
-        |
-        | HTTP tools
-        v
-business-system (FastAPI business APIs)
-        |
-        v
-Postgres
+```mermaid
+flowchart LR
+  customer["客户浏览器 /chat"]
+  agent["坐席工作台 /agent-desk"]
+  dashboard["运营看板 /dashboard"]
+
+  subgraph web["web: Vue3 + Element Plus"]
+    customer
+    agent
+    dashboard
+  end
+
+  subgraph cs["cs-agent: FastAPI + LangGraph"]
+    chat["/chat SSE"]
+    auth["/auth/login"]
+    confirm["/pending-actions"]
+    summary["/dashboard/summary"]
+    graph["LangGraph agent loop"]
+    risk["risk gate: high-risk interrupt"]
+    retrieval["retrieval: Chroma + DashScope rerank"]
+    audit["audit + conversations + messages"]
+  end
+
+  subgraph biz["business-system: FastAPI"]
+    orders["orders / logistics / customers"]
+    tickets["tickets"]
+    refunds["refunds"]
+    coupons["coupons"]
+  end
+
+  subgraph pg["Postgres cs database"]
+    agent_schema["agent data: conversations, messages, pending_actions, audit_logs, checkpoints"]
+    biz_schema["biz data: orders, logistics, customers, tickets, refunds, coupons"]
+  end
+
+  chroma["chroma_data volume"]
+  dashscope["DashScope chat / embedding / rerank"]
+
+  customer -->|"HTTP + SSE"| chat
+  agent -->|"Bearer token"| auth
+  agent -->|"list / approve / reject"| confirm
+  dashboard -->|"Bearer token"| summary
+
+  chat --> graph
+  graph --> retrieval
+  graph --> risk
+  risk -->|"pending high-risk action"| confirm
+  confirm -->|"approved only"| refunds
+  graph -->|"HTTP tools only"| orders
+  graph --> tickets
+  graph --> coupons
+  summary --> audit
+
+  retrieval --> chroma
+  retrieval --> dashscope
+  graph --> dashscope
+
+  audit --> agent_schema
+  confirm --> agent_schema
+  graph --> agent_schema
+  orders --> biz_schema
+  tickets --> biz_schema
+  refunds --> biz_schema
+  coupons --> biz_schema
 ```
+
+可单独查看的 Mermaid 源文件：`docs/images/customer-service-agent-architecture.mmd`。
 
 ## 服务
 
@@ -143,6 +196,6 @@ Vite + Vue3 + Element Plus，两个核心页面：
 
 ## 当前交付缺口
 
-- 数据看板前端页（后端 `/dashboard` 已就绪，前端页待补）。
-- README 演示截图、架构图、完整 API 文档仍待补齐。
-- 评测脚本是第一版链路评测，尚未加入 LLM judge 或人工标注分。
+- 完整 API 文档仍待补齐。
+- 演示截图可按最终演示环境补充。
+- 评测脚本已扩展剧情用例与指标报告，尚未加入 LLM judge 或人工标注分。
