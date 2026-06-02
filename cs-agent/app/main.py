@@ -19,6 +19,13 @@ async def lifespan(app: FastAPI):
         Base.metadata.create_all(bind=get_engine())
     except Exception:
         pass
+    # 预热：提前灌知识库 + 构造图/checkpointer，避免首个 /chat 请求超时。
+    # 失败不阻断启动（如测试环境无 Postgres/无 key）。
+    try:
+        from app.agent.deps import warmup
+        warmup()
+    except Exception:
+        pass
     yield
 
 

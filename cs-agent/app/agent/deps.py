@@ -30,11 +30,32 @@ def _get_checkpointer():
     return _checkpointer
 
 
+_graph = None
+_business = None
+
+
+def _get_graph_and_business():
+    """重组件（图/检索/Chroma/LLM/业务客户端）构造一次，进程级复用。
+
+    首次调用会灌知识库 + PostgresSaver.setup，较慢；之后秒级。
+    db 是请求级的，不在此缓存，由 build_service 每次传入。
+    """
+    global _graph, _business
+    if _graph is None:
+        _business = BusinessClient()
+        ds = DashScopeClient()
+        retriever = Retriever(store=build_store(), rerank_fn=ds.rerank,
+                              top_n=settings.retrieve_top_n, top_k=settings.retrieve_top_k)
+        registry = ToolRegistry(business=_business, retriever=retriever)
+        _graph = build_graph(llm=build_llm(), registry=registry, checkpointer=_get_checkpointer())
+    return _graph, _business
+
+
 def build_service(db: Session) -> ConversationService:
-    business = BusinessClient()
-    ds = DashScopeClient()
-    retriever = Retriever(store=build_store(), rerank_fn=ds.rerank,
-                          top_n=settings.retrieve_top_n, top_k=settings.retrieve_top_k)
-    registry = ToolRegistry(business=business, retriever=retriever)
-    graph = build_graph(llm=build_llm(), registry=registry, checkpointer=_get_checkpointer())
+    graph, business = _get_graph_and_business()
     return ConversationService(db=db, graph=graph, business=business)
+
+
+def warmup() -> None:
+    """启动时预热：提前灌知识库 + setup checkpointer，避免首个请求超时。"""
+    _get_graph_and_business()
