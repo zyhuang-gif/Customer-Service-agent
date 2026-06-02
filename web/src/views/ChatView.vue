@@ -10,6 +10,7 @@ const input = ref('')
 const messages = ref(loadCachedMessages())
 const sending = ref(false)
 let syncTimer = 0
+let typeTimer = 0
 
 function loadCachedMessages() {
   try {
@@ -28,7 +29,7 @@ function persistChat() {
 
 async function loadServerMessages() {
   const token = localStorage.getItem('cs_token')
-  if (!conversationId.value || !token || sending.value) return
+  if (!conversationId.value || !token || sending.value || typeTimer) return
   try {
     const rows = await api(`/conversations/${conversationId.value}/messages`, { token })
     messages.value = rows.map((m) => ({
@@ -42,6 +43,28 @@ async function loadServerMessages() {
   }
 }
 
+function clearTypeTimer() {
+  if (!typeTimer) return
+  window.clearInterval(typeTimer)
+  typeTimer = 0
+}
+
+function playResponse(index, fullText) {
+  clearTypeTimer()
+  const text = fullText || ''
+  let cursor = Math.min(2, text.length)
+  messages.value[index] = { role: 'ai', content: text.slice(0, cursor) }
+  persistChat()
+  if (cursor >= text.length) return
+
+  typeTimer = window.setInterval(() => {
+    cursor = Math.min(cursor + 2, text.length)
+    messages.value[index] = { role: 'ai', content: text.slice(0, cursor) }
+    persistChat()
+    if (cursor >= text.length) clearTypeTimer()
+  }, 30)
+}
+
 async function send() {
   const text = input.value.trim()
   if (!text || sending.value) return
@@ -51,7 +74,6 @@ async function send() {
   persistChat()
   input.value = ''
   sending.value = true
-  let aiContent = ''
   let aiIndex = pendingIndex
   try {
     await chatStream(
@@ -61,16 +83,16 @@ async function send() {
           conversationId.value = ev.conversation_id
           persistChat()
         } else if (ev.type === 'response') {
-          aiContent = ev.content
-          messages.value[aiIndex] = { role: 'ai', content: aiContent }
-          persistChat()
+          playResponse(aiIndex, ev.content)
         } else if (ev.type === 'awaiting_confirmation') {
+          clearTypeTimer()
           messages.value[pendingIndex] = { role: 'system', content: ev.content || '该操作已提交人工确认，请稍候。' }
           persistChat()
         }
       },
     )
   } catch (e) {
+    clearTypeTimer()
     messages.value.push({ role: 'system', content: '网络错误，请重试。' })
     persistChat()
   } finally {
@@ -87,6 +109,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (syncTimer) window.clearInterval(syncTimer)
+  clearTypeTimer()
 })
 </script>
 

@@ -61,8 +61,48 @@ describe('ChatView', () => {
     await sendPromise
     await flushPromises()
 
+    expect(wrapper.text()).toContain('物流')
+    expect(wrapper.text()).not.toContain('物流运输中。')
+
+    await vi.advanceTimersByTimeAsync(200)
+    await flushPromises()
+
     expect(wrapper.text()).toContain('物流运输中。')
     expect(wrapper.text()).not.toContain('正在处理，请稍候')
+  })
+
+  it('高风险确认提示直接完整显示', async () => {
+    let resolveFetch
+    vi.stubGlobal('fetch', vi.fn(() => new Promise((resolve) => {
+      resolveFetch = resolve
+    })))
+    const wrapper = mount(ChatView)
+    await flushPromises()
+
+    wrapper.vm.input = '我要退款'
+    const sendPromise = wrapper.vm.send()
+    await flushPromises()
+
+    resolveFetch({
+      body: {
+        getReader: () => ({
+          read: vi.fn()
+            .mockResolvedValueOnce({
+              done: false,
+              value: new TextEncoder().encode('data: {"type":"start","conversation_id":"conv-1"}\n\n'),
+            })
+            .mockResolvedValueOnce({
+              done: false,
+              value: new TextEncoder().encode('data: {"type":"awaiting_confirmation","content":"该操作涉及资金/履约，已提交人工确认。"}\n\n'),
+            })
+            .mockResolvedValueOnce({ done: true }),
+        }),
+      },
+    })
+    await sendPromise
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('该操作涉及资金/履约，已提交人工确认。')
   })
 
   it('定时同步后端新增消息', async () => {
