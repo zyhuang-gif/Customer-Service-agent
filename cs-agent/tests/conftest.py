@@ -33,6 +33,8 @@ def client(db_session, monkeypatch):
     _sqlite_engine = db_session.bind
     monkeypatch.setattr(_main_module, "get_engine", lambda: _sqlite_engine)
     monkeypatch.setattr(_db_module, "get_engine", lambda: _sqlite_engine)
+    # lifespan 会调 warmup() 真连 Postgres/Chroma/DashScope，测试环境要跳过，否则卡住
+    monkeypatch.setattr(_main_module, "warmup", lambda: None)
 
     def override_get_db():
         yield db_session

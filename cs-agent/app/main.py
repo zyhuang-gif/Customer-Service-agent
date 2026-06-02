@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.agent.deps import warmup
 from app.db import Base, get_engine
 from app.routers import (
     auth_router,
@@ -20,9 +21,8 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     # 预热：提前灌知识库 + 构造图/checkpointer，避免首个 /chat 请求超时。
-    # 失败不阻断启动（如测试环境无 Postgres/无 key）。
+    # 失败不阻断启动（如测试环境无 Postgres/无 key）。测试会 monkeypatch warmup。
     try:
-        from app.agent.deps import warmup
         warmup()
     except Exception:
         pass
