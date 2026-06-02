@@ -1,13 +1,23 @@
 """LangGraph 图：analyze -> agent ->（条件）tools / high_risk(interrupt)。"""
 from __future__ import annotations
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import SystemMessage, ToolMessage
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
 from app.agent.state import AgentState
 from app.agent.tools_bind import ALL_TOOLS
 from app.tools.risk import is_high_risk
+
+
+SYSTEM_PROMPT = """你是电商售后客服 Agent。请优先使用工具查询事实，不要臆测。
+
+工具选择规则：
+- 用户询问物流、订单、退款进度、客户资料、历史工单时，调用对应查询工具。
+- 用户明确要求退款、改地址或发券时，必须调用 apply_refund、change_address 或 issue_coupon。
+- apply_refund、change_address、issue_coupon 是高风险操作，系统会自动转入人工确认；你只负责提出工具调用，不要改用创建工单来替代明确的高风险请求。
+- 用户要求人工、情绪强烈升级、或问题无法独立解决时，调用 transfer_to_human 并给出摘要。
+"""
 
 
 def build_graph(llm, registry, checkpointer, tool_specs=None):
@@ -27,7 +37,7 @@ def build_graph(llm, registry, checkpointer, tool_specs=None):
         return {"intent": intent}
 
     def agent(state: AgentState) -> dict:
-        resp = bound_llm.invoke(state["messages"])
+        resp = bound_llm.invoke([SystemMessage(content=SYSTEM_PROMPT), *state["messages"]])
         return {"messages": [resp]}
 
     def should_continue(state: AgentState) -> str:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -35,6 +36,55 @@ class ConversationService:
             .order_by(Message.created_at.asc(), Message.id.asc())
             .all()
         )
+
+    def _pending_high_risk(self, conversation_id: str, tool_name: str, params: dict[str, Any]) -> dict[str, Any]:
+        pa = PendingAction(
+            conversation_id=conversation_id, tool_name=tool_name,
+            params=params, status="pending", proposed_by="ai",
+        )
+        self.db.add(pa)
+        conv = self.db.get(Conversation, conversation_id)
+        conv.status = "awaiting_confirmation"
+        self.db.commit()
+        audit(self.db, actor="ai", action_type="high_risk", conversation_id=conversation_id,
+              tool_name=tool_name, params=params, risk_level="high_write", status="pending")
+        return {"status": "awaiting_confirmation", "pending_action_id": pa.id,
+                "message": "该操作涉及资金/履约，已提交人工确认。"}
+
+    def _explicit_high_risk_request(self, user_text: str) -> tuple[str, dict[str, Any]] | None:
+        order_match = re.search(r"(?:订单号?|订单编号)?\s*([A-Z0-9]{6,})", user_text, re.IGNORECASE)
+        amount_match = re.search(r"(?:退款金额|金额|退款)?\s*([0-9]+(?:\.[0-9]+)?)\s*元", user_text)
+
+        if any(word in user_text for word in ("申请退款", "我要退款", "要求退款", "提交退款", "退钱")):
+            if any(word in user_text for word in ("退款进度", "退款状态", "查询退款")):
+                return None
+            if order_match and amount_match:
+                return "apply_refund", {
+                    "order_id": order_match.group(1),
+                    "amount": float(amount_match.group(1)),
+                    "reason": "用户明确申请退款",
+                }
+
+        if any(word in user_text for word in ("改地址", "修改地址", "更换地址")):
+            if order_match:
+                address_match = re.search(r"(?:改到|改成|修改为|新地址[:：]?)\s*(.+)$", user_text)
+                if address_match:
+                    return "change_address", {
+                        "order_id": order_match.group(1),
+                        "new_address": address_match.group(1).strip(" 。"),
+                    }
+
+        if any(word in user_text for word in ("发券", "补偿券", "优惠券")):
+            customer_match = re.search(r"(?:客户|用户|会员)\s*([A-Z0-9]{3,})", user_text, re.IGNORECASE)
+            value_match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*元", user_text)
+            if customer_match and value_match:
+                return "issue_coupon", {
+                    "customer_id": customer_match.group(1),
+                    "value": float(value_match.group(1)),
+                    "reason": "用户明确要求发券",
+                }
+
+        return None
 
     def _handoff(self, conversation_id: str, summary: str, reason: str, actor: str = "ai") -> dict[str, Any]:
         conv = self.db.get(Conversation, conversation_id)
@@ -112,25 +162,18 @@ class ConversationService:
             summary = build_handoff_summary(self._recent_messages(conversation_id), sentiment_meta)
             return self._handoff(conversation_id, summary=summary, reason="customer_requested_handoff")
 
+        high_risk_request = self._explicit_high_risk_request(user_text)
+        if high_risk_request:
+            tool_name, params = high_risk_request
+            return self._pending_high_risk(conversation_id, tool_name, params)
+
         state = {"messages": [{"role": "user", "content": user_text}],
                  "conversation_id": conversation_id, "customer_ref": "", "intent": ""}
         result = self.graph.invoke(state, config=self._config(conversation_id))
 
         if "__interrupt__" in result:
             intr = result["__interrupt__"][0].value
-            tool_name = intr["tool_name"]
-            pa = PendingAction(
-                conversation_id=conversation_id, tool_name=tool_name,
-                params=intr["params"], status="pending", proposed_by="ai",
-            )
-            self.db.add(pa)
-            conv = self.db.get(Conversation, conversation_id)
-            conv.status = "awaiting_confirmation"
-            self.db.commit()
-            audit(self.db, actor="ai", action_type="high_risk", conversation_id=conversation_id,
-                  tool_name=tool_name, params=intr["params"], risk_level="high_write", status="pending")
-            return {"status": "awaiting_confirmation", "pending_action_id": pa.id,
-                    "message": "该操作涉及资金/履约，已提交人工确认。"}
+            return self._pending_high_risk(conversation_id, intr["tool_name"], intr["params"])
 
         tool_outcome = self._record_tool_insights(conversation_id, result["messages"])
         if tool_outcome:

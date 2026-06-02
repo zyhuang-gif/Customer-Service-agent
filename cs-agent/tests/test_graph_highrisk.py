@@ -31,6 +31,33 @@ class SpyRegistry:
         return {"ok": True}
 
 
+class PromptSpyLLM:
+    def __init__(self):
+        self.seen_messages = None
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages):
+        self.seen_messages = messages
+        return AIMessage(content="ok")
+
+
+def test_graph_injects_high_risk_system_prompt():
+    llm = PromptSpyLLM()
+    graph = build_graph(llm=llm, registry=SpyRegistry(), checkpointer=MemorySaver())
+    graph.invoke(
+        {"messages": [{"role": "user", "content": "我要申请退款"}],
+         "conversation_id": "conv-prompt", "customer_ref": "x", "intent": ""},
+        config={"configurable": {"thread_id": "conv-prompt"}},
+    )
+
+    first = llm.seen_messages[0]
+    assert getattr(first, "type", "") == "system"
+    assert "apply_refund" in first.content
+    assert "人工确认" in first.content
+
+
 def test_high_risk_interrupts_and_does_not_execute():
     graph = build_graph(llm=HighRiskLLM(), registry=SpyRegistry(), checkpointer=MemorySaver())
     config = {"configurable": {"thread_id": "conv-hr"}}
