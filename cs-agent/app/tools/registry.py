@@ -36,8 +36,9 @@ class ToolRegistry:
 
     # ---- 只读工具 ----
     def _tool_search_knowledge(self, params):
-        hits = self.retriever.retrieve(params["query"])
-        return {"hits": hits, "covered": bool(hits)}
+        query = params["query"]
+        hits = self.retriever.retrieve(query)
+        return {"hits": hits, "covered": bool(hits), "query": query}
 
     def _tool_get_customer(self, params):
         data = self.business.get_customer(params["customer_id"])
@@ -78,3 +79,11 @@ class ToolRegistry:
             assignee=params.get("assignee"),
         )
         return data if data is not None else ToolError("not_found", "更新失败：未找到该工单").to_dict()
+
+    # ---- 控制工具 ----
+    def _tool_transfer_to_human(self, params):
+        return {
+            "handoff": True,
+            "reason": params.get("reason", "需要人工处理"),
+            "draft_summary": params.get("draft_summary", ""),
+        }

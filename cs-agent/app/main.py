@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.db import Base, get_engine
-from app.routers import auth_router, chat_router, confirm_router
+from app.routers import auth_router, chat_router, confirm_router, dashboard_router
 
 
 @asynccontextmanager
@@ -19,6 +19,7 @@ app = FastAPI(title="客服 Agent 服务", lifespan=lifespan)
 app.include_router(auth_router.router)
 app.include_router(chat_router.router)
 app.include_router(confirm_router.router)
+app.include_router(dashboard_router.router)
 
 
 @app.get("/health/live")

@@ -7,6 +7,7 @@ def test_all_ten_tools_classified():
         "get_refund_status", "list_customer_tickets",
         "create_ticket", "update_ticket",
         "apply_refund", "change_address", "issue_coupon",
+        "transfer_to_human",
     }
     assert set(TOOL_RISK.keys()) == expected
 
@@ -25,6 +26,10 @@ def test_high_write_classification():
     assert risk_of("apply_refund") == RiskLevel.HIGH_WRITE
     assert risk_of("change_address") == RiskLevel.HIGH_WRITE
     assert risk_of("issue_coupon") == RiskLevel.HIGH_WRITE
+
+
+def test_control_classification():
+    assert risk_of("transfer_to_human") == RiskLevel.CONTROL
 
 
 def test_is_high_risk_helper():

@@ -73,8 +73,14 @@ def issue_coupon(customer_id: str, value: float, reason: str = "") -> str:
     return ""
 
 
+@tool
+def transfer_to_human(reason: str, draft_summary: str = "") -> str:
+    """转人工处理，提供原因与给坐席的摘要草稿。"""
+    return ""
+
+
 ALL_TOOLS = [
     search_knowledge, get_customer, get_order, get_logistics, get_refund_status,
     list_customer_tickets, create_ticket, update_ticket,
-    apply_refund, change_address, issue_coupon,
+    apply_refund, change_address, issue_coupon, transfer_to_human,
 ]

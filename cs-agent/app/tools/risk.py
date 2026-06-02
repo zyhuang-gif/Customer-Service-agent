@@ -8,6 +8,7 @@ class RiskLevel(str, Enum):
     READONLY = "readonly"
     LOW_WRITE = "low_write"
     HIGH_WRITE = "high_write"
+    CONTROL = "control"
 
 
 TOOL_RISK: dict[str, RiskLevel] = {
@@ -22,6 +23,7 @@ TOOL_RISK: dict[str, RiskLevel] = {
     "apply_refund": RiskLevel.HIGH_WRITE,
     "change_address": RiskLevel.HIGH_WRITE,
     "issue_coupon": RiskLevel.HIGH_WRITE,
+    "transfer_to_human": RiskLevel.CONTROL,
 }
 
 
