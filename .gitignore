@@ -23,6 +23,8 @@ dist/
 .env
 .env.*
 !.env.example
+# 前端 .env.development 只含公开的 API base URL（无密钥），应入库
+!web/.env.development
 
 # ---- 数据与向量库 ----
 *.sqlite3
