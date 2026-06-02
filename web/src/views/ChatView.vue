@@ -1,18 +1,50 @@
 <script setup>
-import { ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { chatStream } from '../api/sse'
+import { api } from '../api/client'
 import MessageBubble from '../components/MessageBubble.vue'
 
-const customerRef = ref('13800000001')
-const conversationId = ref('')
+const customerRef = ref(localStorage.getItem('chat_customer_ref') || '13800000001')
+const conversationId = ref(localStorage.getItem('chat_conversation_id') || '')
 const input = ref('')
-const messages = ref([])
+const messages = ref(loadCachedMessages())
 const sending = ref(false)
+
+function loadCachedMessages() {
+  try {
+    const cached = JSON.parse(localStorage.getItem('chat_messages') || '[]')
+    return Array.isArray(cached) ? cached : []
+  } catch {
+    return []
+  }
+}
+
+function persistChat() {
+  localStorage.setItem('chat_customer_ref', customerRef.value)
+  localStorage.setItem('chat_conversation_id', conversationId.value)
+  localStorage.setItem('chat_messages', JSON.stringify(messages.value))
+}
+
+async function loadServerMessages() {
+  const token = localStorage.getItem('cs_token')
+  if (!conversationId.value || !token) return
+  try {
+    const rows = await api(`/conversations/${conversationId.value}/messages`, { token })
+    messages.value = rows.map((m) => ({
+      role: m.role,
+      content: m.content,
+      citations: (m.meta && m.meta.citations) || [],
+    }))
+  } catch {
+    // 客户页以本地缓存为主；后端拉取失败时保留当前可见历史。
+  }
+}
 
 async function send() {
   const text = input.value.trim()
   if (!text || sending.value) return
   messages.value.push({ role: 'customer', content: text })
+  persistChat()
   input.value = ''
   sending.value = true
   let aiContent = ''
@@ -23,6 +55,7 @@ async function send() {
       (ev) => {
         if (ev.type === 'start') {
           conversationId.value = ev.conversation_id
+          persistChat()
         } else if (ev.type === 'response') {
           aiContent = ev.content
           if (aiIndex === -1) {
@@ -31,17 +64,24 @@ async function send() {
           } else {
             messages.value[aiIndex].content = aiContent
           }
+          persistChat()
         } else if (ev.type === 'awaiting_confirmation') {
           messages.value.push({ role: 'system', content: ev.content || '该操作已提交人工确认，请稍候。' })
+          persistChat()
         }
       },
     )
   } catch (e) {
     messages.value.push({ role: 'system', content: '网络错误，请重试。' })
+    persistChat()
   } finally {
     sending.value = false
   }
 }
+
+watch(customerRef, persistChat)
+
+onMounted(loadServerMessages)
 </script>
 
 <template>
