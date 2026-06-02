@@ -1,0 +1,58 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: cs
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cs"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  business-system:
+    build:
+      context: ./business-system
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/cs
+      DB_SCHEMA: biz
+    ports:
+      - "8100:8100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "python -m app.seed &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8100"
+
+  cs-agent:
+    build:
+      context: ./cs-agent
+    env_file:
+      - path: ./cs-agent/.env.example
+      - path: ./cs-agent/.env
+        required: false
+    environment:
+      BUSINESS_BASE_URL: http://business-system:8100
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/cs
+      AGENT_SCHEMA: agent
+      CHROMA_DIR: /app/chroma_db
+      KNOWLEDGE_DIR: /app/app/knowledge
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      business-system:
+        condition: service_started
+    command: >
+      sh -c "python -m app.seed_agent &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+volumes:
+  postgres_data:

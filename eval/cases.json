@@ -1,0 +1,16 @@
+[
+  {
+    "id": "logistics-refund-human-confirmation",
+    "customer_ref": "13800000001",
+    "message": "订单 20260531002 物流停了好久，我要退款 499 元",
+    "expect_event_types": ["start", "awaiting_confirmation", "done"],
+    "notes": "高风险退款应暂停并生成待确认动作，不能直接执行退款。"
+  },
+  {
+    "id": "simple-greeting",
+    "customer_ref": "13800000001",
+    "message": "你好",
+    "expect_event_types": ["start", "done"],
+    "notes": "基础 SSE 链路应返回 start 和 done。"
+  }
+]
