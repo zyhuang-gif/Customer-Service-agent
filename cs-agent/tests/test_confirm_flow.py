@@ -85,6 +85,9 @@ def test_confirm_executes_business_and_resumes(db_session):
     db_session.refresh(pa)
     assert pa.status == "executed"
     assert pa.result.get("id") == "RF1"
+    assert out["message"] == "坐席已确认执行退款申请，业务系统已创建退款单 RF1，当前状态：处理中。"
+    last_message = db_session.query(Message).filter_by(conversation_id="c1").order_by(Message.id.desc()).first()
+    assert last_message.content == out["message"]
     conv = db_session.get(Conversation, "c1")
     assert conv.status == "ai_handling"
 

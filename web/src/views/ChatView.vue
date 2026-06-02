@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { chatStream } from '../api/sse'
 import { api } from '../api/client'
 import MessageBubble from '../components/MessageBubble.vue'
@@ -9,6 +9,7 @@ const conversationId = ref(localStorage.getItem('chat_conversation_id') || '')
 const input = ref('')
 const messages = ref(loadCachedMessages())
 const sending = ref(false)
+let syncTimer = 0
 
 function loadCachedMessages() {
   try {
@@ -27,7 +28,7 @@ function persistChat() {
 
 async function loadServerMessages() {
   const token = localStorage.getItem('cs_token')
-  if (!conversationId.value || !token) return
+  if (!conversationId.value || !token || sending.value) return
   try {
     const rows = await api(`/conversations/${conversationId.value}/messages`, { token })
     messages.value = rows.map((m) => ({
@@ -35,6 +36,7 @@ async function loadServerMessages() {
       content: m.content,
       citations: (m.meta && m.meta.citations) || [],
     }))
+    persistChat()
   } catch {
     // 客户页以本地缓存为主；后端拉取失败时保留当前可见历史。
   }
@@ -44,11 +46,13 @@ async function send() {
   const text = input.value.trim()
   if (!text || sending.value) return
   messages.value.push({ role: 'customer', content: text })
+  const pendingIndex = messages.value.length
+  messages.value.push({ role: 'system', content: '正在处理，请稍候...' })
   persistChat()
   input.value = ''
   sending.value = true
   let aiContent = ''
-  let aiIndex = -1
+  let aiIndex = pendingIndex
   try {
     await chatStream(
       { conversationId: conversationId.value, customerRef: customerRef.value, message: text },
@@ -58,15 +62,10 @@ async function send() {
           persistChat()
         } else if (ev.type === 'response') {
           aiContent = ev.content
-          if (aiIndex === -1) {
-            messages.value.push({ role: 'ai', content: aiContent })
-            aiIndex = messages.value.length - 1
-          } else {
-            messages.value[aiIndex].content = aiContent
-          }
+          messages.value[aiIndex] = { role: 'ai', content: aiContent }
           persistChat()
         } else if (ev.type === 'awaiting_confirmation') {
-          messages.value.push({ role: 'system', content: ev.content || '该操作已提交人工确认，请稍候。' })
+          messages.value[pendingIndex] = { role: 'system', content: ev.content || '该操作已提交人工确认，请稍候。' }
           persistChat()
         }
       },
@@ -81,7 +80,14 @@ async function send() {
 
 watch(customerRef, persistChat)
 
-onMounted(loadServerMessages)
+onMounted(() => {
+  loadServerMessages()
+  syncTimer = window.setInterval(loadServerMessages, 3000)
+})
+
+onUnmounted(() => {
+  if (syncTimer) window.clearInterval(syncTimer)
+})
 </script>
 
 <template>

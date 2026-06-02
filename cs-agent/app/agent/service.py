@@ -6,7 +6,6 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from langgraph.types import Command
 from sqlalchemy.orm import Session
 
 from app.audit import audit
@@ -36,6 +35,23 @@ class ConversationService:
             .order_by(Message.created_at.asc(), Message.id.asc())
             .all()
         )
+
+    def _approved_message(self, pa: PendingAction, status: str) -> str:
+        if status == "failed":
+            return f"坐席已确认执行{pa.tool_name}，但业务系统执行失败，请稍后由人工继续处理。"
+
+        if pa.tool_name == "apply_refund":
+            refund_id = (pa.result or {}).get("id") or (pa.result or {}).get("refund_id") or ""
+            refund_status = (pa.result or {}).get("status") or "已提交"
+            suffix = f"业务系统已创建退款单 {refund_id}，当前状态：{refund_status}。" if refund_id else f"退款申请已提交，当前状态：{refund_status}。"
+            return f"坐席已确认执行退款申请，{suffix}"
+        if pa.tool_name == "change_address":
+            return "坐席已确认执行改地址申请，业务系统已更新收货地址。"
+        if pa.tool_name == "issue_coupon":
+            coupon_id = (pa.result or {}).get("id") or (pa.result or {}).get("coupon_id") or ""
+            suffix = f"业务系统已发放优惠券 {coupon_id}。" if coupon_id else "业务系统已发放优惠券。"
+            return f"坐席已确认执行发券申请，{suffix}"
+        return "坐席已确认执行该操作，业务系统已处理完成。"
 
     def _pending_high_risk(self, conversation_id: str, tool_name: str, params: dict[str, Any]) -> dict[str, Any]:
         pa = PendingAction(
@@ -220,11 +236,7 @@ class ConversationService:
             self.db.commit()
             audit(self.db, actor=str(reviewer_id), action_type="confirm", conversation_id=pa.conversation_id,
                   tool_name=pa.tool_name, params=pa.params, result=pa.result, risk_level="high_write", status=status)
-            resume_payload = {"approved": True, "result": pa.result}
-
-        final = self.graph.invoke(Command(resume=resume_payload), config=self._config(pa.conversation_id))
-        last = final["messages"][-1]
-        ai_text = getattr(last, "content", "")
+            ai_text = self._approved_message(pa, status)
         self.db.add(Message(conversation_id=pa.conversation_id, role="ai", content=ai_text))
         conv.status = "ai_handling"
         self.db.commit()
