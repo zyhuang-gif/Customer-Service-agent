@@ -11,3 +11,4 @@ class AgentState(TypedDict):
     conversation_id: str
     customer_ref: str
     intent: str
+    coordinator_decision: dict

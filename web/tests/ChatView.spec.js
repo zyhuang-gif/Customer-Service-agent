@@ -71,6 +71,45 @@ describe('ChatView', () => {
     expect(wrapper.text()).not.toContain('正在处理，请稍候')
   })
 
+  it('保存 SSE 返回的引用和协同过程', async () => {
+    let resolveFetch
+    vi.stubGlobal('fetch', vi.fn(() => new Promise((resolve) => {
+      resolveFetch = resolve
+    })))
+    const wrapper = mount(ChatView)
+    await flushPromises()
+
+    wrapper.vm.input = '退款多久到账？'
+    const sendPromise = wrapper.vm.send()
+    await flushPromises()
+
+    resolveFetch({
+      body: {
+        getReader: () => ({
+          read: vi.fn()
+            .mockResolvedValueOnce({
+              done: false,
+              value: new TextEncoder().encode('data: {"type":"start","conversation_id":"conv-1"}\n\n'),
+            })
+            .mockResolvedValueOnce({
+              done: false,
+              value: new TextEncoder().encode('data: {"type":"response","content":"退款通常需要 1-5 个工作日到账。","citations":[{"title":"退款到账时间","source":"refund_policy.md"}],"agent_trace":[{"agent":"CoordinatorAgent","summary":"识别为退款咨询"}]}\n\n'),
+            })
+            .mockResolvedValueOnce({ done: true }),
+        }),
+      },
+    })
+    await sendPromise
+    await vi.advanceTimersByTimeAsync(400)
+    await flushPromises()
+
+    const cached = JSON.parse(localStorage.getItem('chat_messages'))
+    const ai = cached.find((m) => m.role === 'ai')
+    expect(ai.citations[0].title).toBe('退款到账时间')
+    expect(ai.agent_trace[0].agent).toBe('CoordinatorAgent')
+    expect(wrapper.text()).toContain('退款到账时间')
+  })
+
   it('高风险确认提示直接完整显示', async () => {
     let resolveFetch
     vi.stubGlobal('fetch', vi.fn(() => new Promise((resolve) => {

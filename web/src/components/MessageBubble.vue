@@ -13,7 +13,7 @@ defineProps({
       <div v-if="citations.length" class="citations">
         <span class="citation-label">引用：</span>
         <el-tag v-for="(c, i) in citations" :key="i" size="small" type="info" class="citation-tag">
-          {{ c.title }}
+          {{ c.title }}<span v-if="c.source"> · {{ c.source }}</span>
         </el-tag>
       </div>
     </div>

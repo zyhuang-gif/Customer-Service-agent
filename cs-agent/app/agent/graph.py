@@ -5,6 +5,7 @@ from langchain_core.messages import SystemMessage, ToolMessage
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
+from app.agent.routing import route_customer_message
 from app.agent.state import AgentState
 from app.agent.tools_bind import ALL_TOOLS
 from app.tools.risk import is_high_risk
@@ -25,16 +26,14 @@ def build_graph(llm, registry, checkpointer, tool_specs=None):
     bound_llm = llm.bind_tools(tool_specs if tool_specs is not None else ALL_TOOLS)
 
     def analyze(state: AgentState) -> dict:
-        intent = "general"
+        user_text = ""
         for m in reversed(state["messages"]):
             content = getattr(m, "content", "") or (m.get("content", "") if isinstance(m, dict) else "")
             if content:
-                if "退款" in content:
-                    intent = "refund"
-                elif "物流" in content or "快递" in content or "到哪" in content:
-                    intent = "logistics"
+                user_text = content
                 break
-        return {"intent": intent}
+        decision = route_customer_message(user_text)
+        return {"intent": decision["task_type"], "coordinator_decision": decision}
 
     def agent(state: AgentState) -> dict:
         resp = bound_llm.invoke([SystemMessage(content=SYSTEM_PROMPT), *state["messages"]])
@@ -55,7 +54,7 @@ def build_graph(llm, registry, checkpointer, tool_specs=None):
         out_msgs = []
         for tc in last.tool_calls:
             result = registry.call(tc["name"], tc["args"])
-            out_msgs.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
+            out_msgs.append(ToolMessage(content=str(result), tool_call_id=tc["id"], name=tc["name"]))
         return {"messages": out_msgs}
 
     def high_risk(state: AgentState) -> dict:

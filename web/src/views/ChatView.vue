@@ -36,6 +36,7 @@ async function loadServerMessages() {
       role: m.role,
       content: m.content,
       citations: (m.meta && m.meta.citations) || [],
+      agent_trace: (m.meta && m.meta.agent_trace) || [],
     }))
     persistChat()
   } catch {
@@ -49,17 +50,21 @@ function clearTypeTimer() {
   typeTimer = 0
 }
 
-function playResponse(index, fullText) {
+function playResponse(index, fullText, meta = {}) {
   clearTypeTimer()
   const text = fullText || ''
   let cursor = Math.min(2, text.length)
-  messages.value[index] = { role: 'ai', content: text.slice(0, cursor) }
+  const extra = {
+    citations: meta.citations || [],
+    agent_trace: meta.agent_trace || [],
+  }
+  messages.value[index] = { role: 'ai', content: text.slice(0, cursor), ...extra }
   persistChat()
   if (cursor >= text.length) return
 
   typeTimer = window.setInterval(() => {
     cursor = Math.min(cursor + 2, text.length)
-    messages.value[index] = { role: 'ai', content: text.slice(0, cursor) }
+    messages.value[index] = { role: 'ai', content: text.slice(0, cursor), ...extra }
     persistChat()
     if (cursor >= text.length) clearTypeTimer()
   }, 30)
@@ -83,10 +88,18 @@ async function send() {
           conversationId.value = ev.conversation_id
           persistChat()
         } else if (ev.type === 'response') {
-          playResponse(aiIndex, ev.content)
+          playResponse(aiIndex, ev.content, {
+            citations: ev.citations || [],
+            agent_trace: ev.agent_trace || [],
+          })
         } else if (ev.type === 'awaiting_confirmation') {
           clearTypeTimer()
-          messages.value[pendingIndex] = { role: 'system', content: ev.content || '该操作已提交人工确认，请稍候。' }
+          messages.value[pendingIndex] = {
+            role: 'system',
+            content: ev.content || '该操作已提交人工确认，请稍候。',
+            citations: ev.citations || [],
+            agent_trace: ev.agent_trace || [],
+          }
           persistChat()
         }
       },

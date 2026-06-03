@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.audit import audit
+from app.agent.routing import route_customer_message
 from app.insights import analyze_sentiment, build_handoff_summary
 from app.models import Conversation, Message, PendingAction
 
@@ -128,6 +129,76 @@ class ConversationService:
             return None
         return payload if isinstance(payload, dict) else None
 
+    def _coordinator_trace(self, decision: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "agent": "CoordinatorAgent",
+            "action": "route",
+            "summary": decision["reason"],
+            "input": {"task_type": decision["task_type"]},
+            "output": decision,
+            "status": "success",
+        }
+
+    def _final_trace(self) -> dict[str, Any]:
+        return {
+            "agent": "CoordinatorAgent",
+            "action": "respond",
+            "summary": "汇总知识检索和业务工具结果，生成最终客服回复。",
+            "input": {},
+            "output": {},
+            "status": "success",
+        }
+
+    def _tool_trace(self, tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if tool_name == "search_knowledge":
+            return {
+                "agent": "KnowledgeAgent",
+                "action": tool_name,
+                "summary": "检索客服知识库，返回政策依据和引用来源。" if payload.get("covered") else "检索客服知识库，未找到明确依据。",
+                "input": {"query": payload.get("query", "")},
+                "output": {"covered": bool(payload.get("covered")), "hits": len(payload.get("hits") or [])},
+                "status": "success" if payload.get("covered") else "miss",
+            }
+        return {
+            "agent": "ActionAgent",
+            "action": tool_name,
+            "summary": f"调用业务工具 {tool_name} 获取或处理业务数据。",
+            "input": {},
+            "output": payload,
+            "status": "success" if not payload.get("error") else "failed",
+        }
+
+    def _collect_tool_metadata(self, conversation_id: str, messages: list) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None]:
+        citations: list[dict[str, Any]] = []
+        trace: list[dict[str, Any]] = []
+        handoff: dict[str, Any] | None = None
+        for msg in messages:
+            tool_name = getattr(msg, "name", None)
+            payload = self._decode_tool_payload(msg)
+            if not tool_name or not payload:
+                continue
+            trace.append(self._tool_trace(tool_name, payload))
+            if tool_name == "search_knowledge":
+                citations.extend([
+                    {
+                        "title": hit.get("title", ""),
+                        "source": hit.get("source", ""),
+                        "text": hit.get("text", ""),
+                        "score": hit.get("score"),
+                    }
+                    for hit in payload.get("hits", [])
+                ])
+            if tool_name == "transfer_to_human" and payload.get("handoff") is True:
+                summary = payload.get("draft_summary") or build_handoff_summary(
+                    self._recent_messages(conversation_id), {}
+                )
+                handoff = self._handoff(
+                    conversation_id,
+                    summary=summary,
+                    reason=payload.get("reason", "transfer_to_human"),
+                )
+        return citations, trace, handoff
+
     def _record_tool_insights(self, conversation_id: str, messages: list) -> dict[str, Any] | None:
         for msg in messages:
             tool_name = getattr(msg, "name", None)
@@ -171,35 +242,80 @@ class ConversationService:
 
     def start_turn(self, conversation_id: str, user_text: str) -> dict[str, Any]:
         sentiment_meta = analyze_sentiment(user_text)
-        self.db.add(Message(conversation_id=conversation_id, role="customer", content=user_text, meta=sentiment_meta))
+        decision = route_customer_message(user_text)
+        self.db.add(Message(
+            conversation_id=conversation_id,
+            role="customer",
+            content=user_text,
+            meta={**sentiment_meta, "coordinator_decision": decision},
+        ))
         self.db.commit()
 
         if sentiment_meta["handoff_requested"]:
             summary = build_handoff_summary(self._recent_messages(conversation_id), sentiment_meta)
-            return self._handoff(conversation_id, summary=summary, reason="customer_requested_handoff")
+            out = self._handoff(conversation_id, summary=summary, reason="customer_requested_handoff")
+            out["agent_trace"] = [self._coordinator_trace(decision)]
+            out["citations"] = []
+            return out
 
         high_risk_request = self._explicit_high_risk_request(user_text)
         if high_risk_request:
             tool_name, params = high_risk_request
-            return self._pending_high_risk(conversation_id, tool_name, params)
+            out = self._pending_high_risk(conversation_id, tool_name, params)
+            out["agent_trace"] = [
+                self._coordinator_trace(decision),
+                {
+                    "agent": "ActionAgent",
+                    "action": tool_name,
+                    "summary": f"识别到高风险业务动作 {tool_name}，已提交人工确认。",
+                    "input": params,
+                    "output": {"pending_action_id": out["pending_action_id"]},
+                    "status": "pending",
+                },
+            ]
+            out["citations"] = []
+            return out
 
         state = {"messages": [{"role": "user", "content": user_text}],
-                 "conversation_id": conversation_id, "customer_ref": "", "intent": ""}
+                 "conversation_id": conversation_id, "customer_ref": "", "intent": decision["task_type"],
+                 "coordinator_decision": decision}
         result = self.graph.invoke(state, config=self._config(conversation_id))
 
         if "__interrupt__" in result:
             intr = result["__interrupt__"][0].value
-            return self._pending_high_risk(conversation_id, intr["tool_name"], intr["params"])
+            out = self._pending_high_risk(conversation_id, intr["tool_name"], intr["params"])
+            out["agent_trace"] = [self._coordinator_trace(decision)]
+            out["citations"] = []
+            return out
 
         tool_outcome = self._record_tool_insights(conversation_id, result["messages"])
         if tool_outcome:
+            tool_outcome.setdefault("agent_trace", [self._coordinator_trace(decision)])
+            tool_outcome.setdefault("citations", [])
             return tool_outcome
+        citations, tool_trace, handoff = self._collect_tool_metadata(conversation_id, result["messages"])
+        if handoff:
+            handoff["agent_trace"] = [self._coordinator_trace(decision), *tool_trace]
+            handoff["citations"] = citations
+            return handoff
 
         last = result["messages"][-1]
         ai_text = getattr(last, "content", "")
-        self.db.add(Message(conversation_id=conversation_id, role="ai", content=ai_text))
+        agent_trace = [self._coordinator_trace(decision), *tool_trace, self._final_trace()]
+        meta = {
+            "coordinator_decision": decision,
+            "citations": citations,
+            "agent_trace": agent_trace,
+        }
+        self.db.add(Message(conversation_id=conversation_id, role="ai", content=ai_text, meta=meta))
         self.db.commit()
-        return {"status": "ai_handling", "message": ai_text}
+        return {
+            "status": "ai_handling",
+            "message": ai_text,
+            "citations": citations,
+            "agent_trace": agent_trace,
+            "coordinator_decision": decision,
+        }
 
     def resume_action(self, pending_action_id: int, approved: bool, reviewer_id: int) -> dict[str, Any]:
         pa = self.db.get(PendingAction, pending_action_id)

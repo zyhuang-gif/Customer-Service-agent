@@ -30,9 +30,12 @@ def chat(body: ChatIn, db: Session = Depends(get_db)):
         out = svc.start_turn(conv_id, body.message)
         if out["status"] == "awaiting_confirmation":
             yield _sse({"type": "awaiting_confirmation", "pending_action_id": out["pending_action_id"],
-                        "content": out["message"]})
+                        "content": out["message"], "citations": out.get("citations", []),
+                        "agent_trace": out.get("agent_trace", [])})
         else:
-            yield _sse({"type": "response", "content": out["message"]})
+            yield _sse({"type": "response", "content": out["message"],
+                        "citations": out.get("citations", []),
+                        "agent_trace": out.get("agent_trace", [])})
         yield _sse({"type": "done", "conversation_id": conv_id})
 
     return StreamingResponse(gen(), media_type="text/event-stream")

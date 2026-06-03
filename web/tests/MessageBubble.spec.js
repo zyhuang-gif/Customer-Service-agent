@@ -17,6 +17,7 @@ describe('MessageBubble', () => {
       },
     })
     expect(w.text()).toContain('物流催办政策')
+    expect(w.text()).toContain('aftersale_policy.md')
   })
 
   it('不同角色应用不同样式类', () => {

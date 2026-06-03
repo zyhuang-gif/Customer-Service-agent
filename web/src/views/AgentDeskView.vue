@@ -174,8 +174,17 @@ onUnmounted(() => {
     <div class="col col-mid">
       <div class="col-title">对话内容</div>
       <div class="msg-area">
-        <MessageBubble v-for="m in messages" :key="m.id" :role="m.role" :content="m.content"
-                       :citations="(m.meta && m.meta.citations) || []" />
+        <div v-for="m in messages" :key="m.id" class="message-block">
+          <MessageBubble :role="m.role" :content="m.content"
+                         :citations="(m.meta && m.meta.citations) || []" />
+          <div v-if="m.meta && m.meta.agent_trace && m.meta.agent_trace.length" class="agent-trace">
+            <div class="trace-title">Agent Trace</div>
+            <div v-for="(step, index) in m.meta.agent_trace" :key="index" class="trace-step">
+              <span class="trace-agent">{{ step.agent }}</span>
+              <span class="trace-summary">{{ step.summary }}</span>
+            </div>
+          </div>
+        </div>
         <div v-if="!messages.length" class="empty">选择左侧会话查看对话</div>
       </div>
       <div class="agent-reply">
@@ -279,6 +288,12 @@ onUnmounted(() => {
 .col-right { width: 360px; border-right: none; }
 .col-title { padding: 12px 16px; font-weight: 600; border-bottom: 1px solid #ebeef5; }
 .msg-area, .pending-area { flex: 1; overflow-y: auto; padding: 16px; }
+.message-block { margin-bottom: 8px; }
+.agent-trace { max-width: 72%; margin: 4px 0 10px; padding: 8px 10px; border-left: 3px solid #409eff; background: #f5f7fa; font-size: 12px; color: #606266; }
+.trace-title { font-weight: 600; color: #303133; margin-bottom: 4px; }
+.trace-step { display: flex; gap: 8px; line-height: 1.5; }
+.trace-agent { color: #409eff; white-space: nowrap; font-weight: 600; }
+.trace-summary { overflow-wrap: anywhere; }
 .agent-reply { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid #ebeef5; }
 .agent-reply .el-button { width: 72px; }
 .handoff-panel { padding: 12px 16px; border-bottom: 1px solid #ebeef5; background: #f5f7fa; }

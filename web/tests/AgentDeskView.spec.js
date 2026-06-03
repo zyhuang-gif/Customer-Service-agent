@@ -157,6 +157,45 @@ describe('AgentDeskView', () => {
     expect(wrapper.find('.msg-area').text()).not.toContain('建议人工处理：先安抚客户')
   })
 
+  it('坐席侧展示 AI 消息的 Agent Trace', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (String(url).endsWith('/conversations')) {
+        return { ok: true, json: async () => conversationsSecond }
+      }
+      if (String(url).endsWith('/pending-actions')) {
+        return { ok: true, json: async () => [] }
+      }
+      if (String(url).endsWith('/conversations/conv-1/messages')) {
+        return {
+          ok: true,
+          json: async () => [
+            { id: 1, role: 'customer', content: '退款多久到账？', meta: {} },
+            {
+              id: 2,
+              role: 'ai',
+              content: '退款通常需要 1-5 个工作日到账。',
+              meta: {
+                agent_trace: [
+                  { agent: 'CoordinatorAgent', summary: '识别为退款咨询' },
+                  { agent: 'KnowledgeAgent', summary: '检索退款政策' },
+                ],
+              },
+            },
+          ],
+        }
+      }
+      return { ok: true, json: async () => [] }
+    }))
+
+    const wrapper = mount(AgentDeskView)
+    await flushPromises()
+    await wrapper.find('.conv-item').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.agent-trace').text()).toContain('CoordinatorAgent')
+    expect(wrapper.find('.agent-trace').text()).toContain('检索退款政策')
+  })
+
   it('人工处理会话展示常用语且点击只填入回复草稿', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url) => {
       if (String(url).endsWith('/conversations')) {
