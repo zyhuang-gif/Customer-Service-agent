@@ -18,6 +18,9 @@ let refreshTimer = 0
 
 const activeConversation = computed(() => conversations.value.find((c) => c.id === activeId.value))
 const canAgentReply = computed(() => activeConversation.value?.status === 'human_handling')
+const handoffSummaryLines = computed(() => (
+  activeConversation.value?.summary ? activeConversation.value.summary.split('\n').filter(Boolean) : []
+))
 
 async function loadConversations() {
   conversations.value = await api('/conversations', { token: auth.token })
@@ -111,6 +114,10 @@ onUnmounted(() => {
       </div>
     </div>
     <div class="col col-right">
+      <div v-if="handoffSummaryLines.length" class="handoff-panel">
+        <div class="panel-title">接管信息</div>
+        <div v-for="line in handoffSummaryLines" :key="line" class="summary-line">{{ line }}</div>
+      </div>
       <div class="col-title">
         待确认动作
         <el-badge :value="pendingActions.length" :hidden="!pendingActions.length" />
@@ -133,5 +140,8 @@ onUnmounted(() => {
 .msg-area, .pending-area { flex: 1; overflow-y: auto; padding: 16px; }
 .agent-reply { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid #ebeef5; }
 .agent-reply .el-button { width: 72px; }
+.handoff-panel { padding: 12px 16px; border-bottom: 1px solid #ebeef5; background: #f5f7fa; }
+.panel-title { font-weight: 600; margin-bottom: 8px; }
+.summary-line { font-size: 13px; color: #606266; line-height: 1.5; margin-top: 4px; white-space: pre-wrap; }
 .empty { color: #909399; text-align: center; margin-top: 40px; }
 </style>

@@ -48,6 +48,9 @@ def test_explicit_handoff_sets_status_summary_and_audit_without_graph(db_session
     assert out["status"] == "human_handling"
     assert conv.status == "human_handling"
     assert "客户问题：我要转人工" in conv.summary
+    messages = db_session.query(Message).filter_by(conversation_id="conv-1").all()
+    assert all("客户情绪：" not in m.content for m in messages)
+    assert all("建议人工处理：" not in m.content for m in messages)
     assert audit.status == "human_handling"
     assert graph.invoked is False
 

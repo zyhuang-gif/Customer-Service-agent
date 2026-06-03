@@ -8,7 +8,12 @@ const conversationsSecond = [
   { id: 'conv-1', customer_ref: '13800000001', status: 'awaiting_confirmation' },
 ]
 const humanConversation = [
-  { id: 'conv-human', customer_ref: '13800000002', status: 'human_handling' },
+  {
+    id: 'conv-human',
+    customer_ref: '13800000002',
+    status: 'human_handling',
+    summary: '客户问题：我要转人工\n客户情绪：angry / high\n建议人工处理：先安抚客户',
+  },
 ]
 const pendingFirst = []
 const pendingSecond = [
@@ -120,5 +125,35 @@ describe('AgentDeskView', () => {
       }),
     )
     expect(wrapper.text()).toContain('您好，我来继续处理。')
+  })
+
+  it('转人工摘要只展示在坐席侧接管信息中', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (String(url).endsWith('/conversations')) {
+        return { ok: true, json: async () => humanConversation }
+      }
+      if (String(url).endsWith('/pending-actions')) {
+        return { ok: true, json: async () => [] }
+      }
+      if (String(url).endsWith('/conversations/conv-human/messages')) {
+        return {
+          ok: true,
+          json: async () => [
+            { id: 1, role: 'customer', content: '我要转人工', meta: { sentiment: 'angry', risk: 'high' } },
+          ],
+        }
+      }
+      return { ok: true, json: async () => [] }
+    }))
+
+    const wrapper = mount(AgentDeskView)
+    await flushPromises()
+    await wrapper.find('.conv-item').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.handoff-panel').text()).toContain('客户问题：我要转人工')
+    expect(wrapper.find('.handoff-panel').text()).toContain('客户情绪：angry / high')
+    expect(wrapper.find('.msg-area').text()).not.toContain('客户情绪：angry / high')
+    expect(wrapper.find('.msg-area').text()).not.toContain('建议人工处理：先安抚客户')
   })
 })
