@@ -101,7 +101,7 @@ describe('ChatView', () => {
     expect(wrapper.text()).not.toContain('正在处理，请稍候')
   })
 
-  it('保存 SSE 返回的引用和协同过程', async () => {
+  it('保存 SSE 返回的引用并展示脱敏后的处理进度', async () => {
     let resolveFetch
     vi.stubGlobal('fetch', vi.fn(() => new Promise((resolve) => {
       resolveFetch = resolve
@@ -139,7 +139,9 @@ describe('ChatView', () => {
     expect(ai.agent_trace[0].agent).toBe('CoordinatorAgent')
     expect(wrapper.text()).toContain('退款到账时间')
     expect(wrapper.text()).toContain('识别为退款咨询')
-    expect(wrapper.text()).toContain('AI 协同过程')
+    expect(wrapper.text()).toContain('处理进度')
+    expect(wrapper.text()).not.toContain('AI 协同过程')
+    expect(wrapper.text()).not.toContain('CoordinatorAgent')
   })
 
   it('高风险确认提示直接完整显示', async () => {

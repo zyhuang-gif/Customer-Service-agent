@@ -268,12 +268,11 @@ onUnmounted(() => {
         </section>
 
         <section class="panel-section" :class="{ muted: !latestTrace.length }">
-          <div class="panel-title">AI 协同过程</div>
+          <div class="panel-title">处理进度</div>
           <div v-if="latestTrace.length" class="side-trace">
             <div v-for="(step, i) in latestTrace" :key="i" class="side-trace-step">
               <span>{{ i + 1 }}</span>
               <div>
-                <strong>{{ step.agent || 'Agent' }}</strong>
                 <p>{{ step.summary || step.action || '完成处理步骤' }}</p>
               </div>
             </div>
@@ -322,7 +321,6 @@ onUnmounted(() => {
 .side-trace { display: grid; gap: 10px; }
 .side-trace-step { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; }
 .side-trace-step > span { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: #e8f1ff; color: #1f6feb; font-size: 12px; font-weight: 700; }
-.side-trace-step strong { display: block; color: #344054; font-size: 13px; }
 .side-trace-step p { margin: 2px 0 0; color: #667085; font-size: 12px; line-height: 1.45; }
 .panel-empty { color: #667085; font-size: 13px; }
 

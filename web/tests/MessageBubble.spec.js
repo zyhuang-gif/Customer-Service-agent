@@ -24,4 +24,23 @@ describe('MessageBubble', () => {
     const w = mount(MessageBubble, { props: { role: 'customer', content: 'x' } })
     expect(w.find('.bubble-customer').exists()).toBe(true)
   })
+
+  it('客户侧处理进度不暴露内部 Agent 名称', () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'ai',
+        content: '退款通常需要 1-5 个工作日到账。',
+        agentTrace: [
+          { agent: 'CoordinatorAgent', summary: '识别为退款咨询' },
+          { agent: 'KnowledgeAgent', summary: '查询退款到账规则' },
+        ],
+      },
+    })
+
+    expect(w.text()).toContain('处理进度')
+    expect(w.text()).toContain('识别为退款咨询')
+    expect(w.text()).toContain('查询退款到账规则')
+    expect(w.text()).not.toContain('CoordinatorAgent')
+    expect(w.text()).not.toContain('KnowledgeAgent')
+  })
 })

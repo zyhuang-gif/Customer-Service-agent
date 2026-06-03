@@ -22,11 +22,10 @@ defineProps({
       </div>
 
       <div v-if="agentTrace.length" class="trace-block">
-        <div class="meta-title">AI 协同过程</div>
+        <div class="meta-title">处理进度</div>
         <div class="trace-list">
           <div v-for="(step, i) in agentTrace" :key="i" class="trace-step">
             <span class="trace-dot">{{ i + 1 }}</span>
-            <span class="trace-agent">{{ step.agent || 'Agent' }}</span>
             <span class="trace-summary">{{ step.summary || step.action || '完成处理步骤' }}</span>
           </div>
         </div>
@@ -50,14 +49,11 @@ defineProps({
 .citation-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .citation-item { border: 1px solid #d7deea; border-radius: 999px; padding: 2px 8px; background: #f8fafc; color: #475467; font-size: 12px; }
 .trace-list { display: grid; gap: 6px; }
-.trace-step { display: grid; grid-template-columns: 20px auto 1fr; align-items: center; gap: 7px; color: #475467; font-size: 12px; }
+.trace-step { display: grid; grid-template-columns: 20px 1fr; align-items: center; gap: 7px; color: #475467; font-size: 12px; }
 .trace-dot { width: 18px; height: 18px; border-radius: 50%; background: #e8f1ff; color: #1f6feb; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; }
-.trace-agent { color: #344054; font-weight: 600; }
 .trace-summary { min-width: 0; word-break: break-word; }
 
 @media (max-width: 720px) {
   .bubble { max-width: 88%; }
-  .trace-step { grid-template-columns: 20px 1fr; }
-  .trace-summary { grid-column: 2; }
 }
 </style>
