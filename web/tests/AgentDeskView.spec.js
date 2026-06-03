@@ -7,6 +7,9 @@ const conversationsFirst = []
 const conversationsSecond = [
   { id: 'conv-1', customer_ref: '13800000001', status: 'awaiting_confirmation' },
 ]
+const humanConversation = [
+  { id: 'conv-human', customer_ref: '13800000002', status: 'human_handling' },
+]
 const pendingFirst = []
 const pendingSecond = [
   {
@@ -67,5 +70,55 @@ describe('AgentDeskView', () => {
         headers: expect.objectContaining({ Authorization: 'Bearer token-1' }),
       }),
     )
+  })
+
+  it('人工处理会话允许坐席发送回复', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url, options = {}) => {
+      if (String(url).endsWith('/conversations')) {
+        return { ok: true, json: async () => humanConversation }
+      }
+      if (String(url).endsWith('/pending-actions')) {
+        return { ok: true, json: async () => [] }
+      }
+      if (String(url).endsWith('/conversations/conv-human/messages') && options.method === 'POST') {
+        return {
+          ok: true,
+          json: async () => ({
+            id: 2,
+            role: 'agent',
+            content: '您好，我来继续处理。',
+            meta: { agent_id: 1 },
+          }),
+        }
+      }
+      if (String(url).endsWith('/conversations/conv-human/messages')) {
+        return {
+          ok: true,
+          json: async () => [
+            { id: 1, role: 'customer', content: '我要转人工', meta: {} },
+          ],
+        }
+      }
+      return { ok: true, json: async () => [] }
+    }))
+
+    const wrapper = mount(AgentDeskView)
+    await flushPromises()
+    await wrapper.find('.conv-item').trigger('click')
+    await flushPromises()
+
+    wrapper.vm.agentReply = '您好，我来继续处理。'
+    await wrapper.vm.sendAgentReply()
+    await flushPromises()
+
+    expect(fetch).toHaveBeenCalledWith(
+      'http://localhost:8000/conversations/conv-human/messages',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ content: '您好，我来继续处理。' }),
+        headers: expect.objectContaining({ Authorization: 'Bearer token-1' }),
+      }),
+    )
+    expect(wrapper.text()).toContain('您好，我来继续处理。')
   })
 })

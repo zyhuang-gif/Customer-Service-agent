@@ -53,5 +53,35 @@ def test_get_conversation_messages(client, db_session):
     assert body[1]["content"] == "您好，有什么可以帮您"
 
 
+def test_agent_reply_to_human_conversation(client, db_session):
+    h = _login(client, db_session)
+    db_session.add(Conversation(id="c1", customer_ref="138", status="human_handling"))
+    db_session.add(Message(conversation_id="c1", role="customer", content="我要转人工"))
+    db_session.commit()
+
+    r = client.post("/conversations/c1/messages", json={"content": "您好，我来继续处理。"}, headers=h)
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["role"] == "agent"
+    assert body["content"] == "您好，我来继续处理。"
+    assert body["meta"]["agent_id"] == 1
+
+    rows = db_session.query(Message).filter_by(conversation_id="c1").order_by(Message.id).all()
+    assert rows[-1].role == "agent"
+    assert rows[-1].content == "您好，我来继续处理。"
+
+
+def test_agent_reply_rejects_non_human_conversation(client, db_session):
+    h = _login(client, db_session)
+    db_session.add(Conversation(id="c1", customer_ref="138", status="ai_handling"))
+    db_session.commit()
+
+    r = client.post("/conversations/c1/messages", json={"content": "我来处理。"}, headers=h)
+
+    assert r.status_code == 409
+    assert "人工处理" in r.json()["detail"]
+
+
 def test_conversations_require_auth(client):
     assert client.get("/conversations").status_code == 401

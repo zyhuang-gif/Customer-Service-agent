@@ -21,3 +21,7 @@ class ChatIn(BaseModel):
 
 class ConfirmIn(BaseModel):
     approved: bool
+
+
+class AgentReplyIn(BaseModel):
+    content: str
