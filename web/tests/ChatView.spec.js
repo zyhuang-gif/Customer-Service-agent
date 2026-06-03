@@ -28,6 +28,36 @@ describe('ChatView', () => {
     expect(wrapper.text()).toContain('您的订单正在运输中。')
   })
 
+  it('空会话展示真实客服入口和服务上下文', async () => {
+    const wrapper = mount(ChatView)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('服务中')
+    expect(wrapper.text()).toContain('查订单')
+    expect(wrapper.text()).toContain('查物流')
+    expect(wrapper.text()).toContain('退款进度')
+    expect(wrapper.text()).toContain('服务上下文')
+    expect(wrapper.text()).toContain('等待用户描述问题')
+  })
+
+  it('点击快捷入口会填充输入框并发送问题', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      body: {
+        getReader: () => ({
+          read: vi.fn().mockResolvedValueOnce({ done: true }),
+        }),
+      },
+    })))
+    const wrapper = mount(ChatView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="quick-intent-logistics"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('我想查询物流进度')
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
   it('发送后立即显示处理中反馈', async () => {
     let resolveFetch
     vi.stubGlobal('fetch', vi.fn(() => new Promise((resolve) => {
@@ -108,6 +138,8 @@ describe('ChatView', () => {
     expect(ai.citations[0].title).toBe('退款到账时间')
     expect(ai.agent_trace[0].agent).toBe('CoordinatorAgent')
     expect(wrapper.text()).toContain('退款到账时间')
+    expect(wrapper.text()).toContain('识别为退款咨询')
+    expect(wrapper.text()).toContain('AI 协同过程')
   })
 
   it('高风险确认提示直接完整显示', async () => {
