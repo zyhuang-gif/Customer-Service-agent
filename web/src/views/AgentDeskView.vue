@@ -203,7 +203,7 @@ onUnmounted(() => {
           {{ text }}
         </button>
       </div>
-      <div v-if="canAgentReply" class="order-lookup">
+      <div class="order-lookup">
         <div class="panel-title">订单查询</div>
         <div class="order-search">
           <el-input
