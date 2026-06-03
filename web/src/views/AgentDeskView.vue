@@ -15,6 +15,12 @@ const pendingActions = ref([])
 const agentReply = ref('')
 const replying = ref(false)
 let refreshTimer = 0
+const quickReplies = [
+  '您好，我是人工客服，已经接手继续处理。',
+  '我先为您核实订单/物流/退款信息，请稍等。',
+  '理解您的着急，我会优先帮您跟进。',
+  '这个问题需要进一步确认，我会给您明确下一步。',
+]
 
 const activeConversation = computed(() => conversations.value.find((c) => c.id === activeId.value))
 const canAgentReply = computed(() => activeConversation.value?.status === 'human_handling')
@@ -61,6 +67,11 @@ async function sendAgentReply() {
   } finally {
     replying.value = false
   }
+}
+
+function useQuickReply(text) {
+  if (!canAgentReply.value) return
+  agentReply.value = text
 }
 
 async function onReview({ id, approved }) {
@@ -118,6 +129,12 @@ onUnmounted(() => {
         <div class="panel-title">接管信息</div>
         <div v-for="line in handoffSummaryLines" :key="line" class="summary-line">{{ line }}</div>
       </div>
+      <div v-if="canAgentReply" class="quick-replies">
+        <div class="panel-title">常用语</div>
+        <button v-for="text in quickReplies" :key="text" type="button" class="quick-reply" @click="useQuickReply(text)">
+          {{ text }}
+        </button>
+      </div>
       <div class="col-title">
         待确认动作
         <el-badge :value="pendingActions.length" :hidden="!pendingActions.length" />
@@ -143,5 +160,8 @@ onUnmounted(() => {
 .handoff-panel { padding: 12px 16px; border-bottom: 1px solid #ebeef5; background: #f5f7fa; }
 .panel-title { font-weight: 600; margin-bottom: 8px; }
 .summary-line { font-size: 13px; color: #606266; line-height: 1.5; margin-top: 4px; white-space: pre-wrap; }
+.quick-replies { padding: 12px 16px; border-bottom: 1px solid #ebeef5; }
+.quick-reply { display: block; width: 100%; text-align: left; border: 1px solid #dcdfe6; background: #fff; color: #303133; border-radius: 6px; padding: 8px 10px; margin-top: 8px; cursor: pointer; line-height: 1.4; }
+.quick-reply:hover { border-color: #409eff; color: #409eff; background: #ecf5ff; }
 .empty { color: #909399; text-align: center; margin-top: 40px; }
 </style>

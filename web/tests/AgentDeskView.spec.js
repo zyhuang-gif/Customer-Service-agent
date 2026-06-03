@@ -156,4 +156,40 @@ describe('AgentDeskView', () => {
     expect(wrapper.find('.msg-area').text()).not.toContain('客户情绪：angry / high')
     expect(wrapper.find('.msg-area').text()).not.toContain('建议人工处理：先安抚客户')
   })
+
+  it('人工处理会话展示常用语且点击只填入回复草稿', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (String(url).endsWith('/conversations')) {
+        return { ok: true, json: async () => humanConversation }
+      }
+      if (String(url).endsWith('/pending-actions')) {
+        return { ok: true, json: async () => [] }
+      }
+      if (String(url).endsWith('/conversations/conv-human/messages')) {
+        return {
+          ok: true,
+          json: async () => [
+            { id: 1, role: 'customer', content: '我要转人工', meta: {} },
+          ],
+        }
+      }
+      return { ok: true, json: async () => [] }
+    }))
+
+    const wrapper = mount(AgentDeskView)
+    await flushPromises()
+    await wrapper.find('.conv-item').trigger('click')
+    await flushPromises()
+
+    const quickReply = wrapper.find('.quick-replies button')
+    expect(wrapper.find('.quick-replies').text()).toContain('我先为您核实订单/物流/退款信息，请稍等。')
+
+    await quickReply.trigger('click')
+
+    expect(wrapper.vm.agentReply).toBe(quickReply.text())
+    expect(fetch).not.toHaveBeenCalledWith(
+      'http://localhost:8000/conversations/conv-human/messages',
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
 })
