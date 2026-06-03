@@ -83,5 +83,58 @@ def test_agent_reply_rejects_non_human_conversation(client, db_session):
     assert "人工处理" in r.json()["detail"]
 
 
+def test_agent_desk_order_detail_aggregates_business_info(client, db_session, monkeypatch):
+    h = _login(client, db_session)
+
+    def fake_get_order(self, order_id):
+        assert order_id == "20260531002"
+        return {
+            "id": order_id,
+            "customer_id": "cust-1",
+            "status": "已发货",
+            "amount": 499,
+            "items": [{"sku": "SKU-1", "name": "保温杯", "qty": 1}],
+            "address": "上海市浦东新区",
+        }
+
+    def fake_get_customer(self, customer_id):
+        assert customer_id == "cust-1"
+        return {"id": customer_id, "name": "张三", "phone": "13800000001", "member_level": "VIP"}
+
+    def fake_get_logistics(self, order_id):
+        return {"order_id": order_id, "carrier": "顺丰", "tracking_no": "SF123", "status": "运输中"}
+
+    def fake_get_refund_status(self, order_id):
+        return {"order_id": order_id, "status": "无", "refund": None}
+
+    def fake_list_customer_tickets(self, customer_id):
+        return [
+            {"id": "t1", "order_id": "20260531002", "status": "open", "summary": "催物流"},
+            {"id": "t2", "order_id": "other", "status": "closed", "summary": "历史咨询"},
+        ]
+
+    import app.clients.business_client as business_client
+
+    monkeypatch.setattr(business_client.BusinessClient, "get_order", fake_get_order)
+    monkeypatch.setattr(business_client.BusinessClient, "get_customer", fake_get_customer)
+    monkeypatch.setattr(business_client.BusinessClient, "get_logistics", fake_get_logistics)
+    monkeypatch.setattr(business_client.BusinessClient, "get_refund_status", fake_get_refund_status)
+    monkeypatch.setattr(business_client.BusinessClient, "list_customer_tickets", fake_list_customer_tickets)
+
+    r = client.get("/agent-desk/orders/20260531002", headers=h)
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["order"]["id"] == "20260531002"
+    assert body["customer"]["phone"] == "13800000001"
+    assert body["logistics"]["tracking_no"] == "SF123"
+    assert body["refund"]["status"] == "无"
+    assert [t["id"] for t in body["tickets"]] == ["t1"]
+
+
+def test_agent_desk_order_detail_requires_auth(client):
+    assert client.get("/agent-desk/orders/20260531002").status_code == 401
+
+
 def test_conversations_require_auth(client):
     assert client.get("/conversations").status_code == 401

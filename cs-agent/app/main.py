@@ -7,6 +7,7 @@ from app.agent.deps import warmup
 from app.db import Base, get_engine
 from app.routers import (
     auth_router,
+    agent_desk_router,
     chat_router,
     confirm_router,
     conversation_router,
@@ -40,6 +41,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router.router)
+app.include_router(agent_desk_router.router)
 app.include_router(chat_router.router)
 app.include_router(confirm_router.router)
 app.include_router(conversation_router.router)

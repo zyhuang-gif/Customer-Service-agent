@@ -192,4 +192,63 @@ describe('AgentDeskView', () => {
       expect.objectContaining({ method: 'POST' }),
     )
   })
+
+  it('坐席可按订单号查询并查看订单完整信息', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (String(url).endsWith('/conversations')) {
+        return { ok: true, json: async () => humanConversation }
+      }
+      if (String(url).endsWith('/pending-actions')) {
+        return { ok: true, json: async () => [] }
+      }
+      if (String(url).endsWith('/conversations/conv-human/messages')) {
+        return {
+          ok: true,
+          json: async () => [
+            { id: 1, role: 'customer', content: '请帮我看下 20260531002', meta: {} },
+          ],
+        }
+      }
+      if (String(url).endsWith('/agent-desk/orders/20260531002')) {
+        return {
+          ok: true,
+          json: async () => ({
+            order: {
+              id: '20260531002',
+              status: '已发货',
+              amount: 499,
+              address: '上海市浦东新区',
+              items: [{ name: '保温杯', qty: 1 }],
+            },
+            customer: { name: '张三', phone: '13800000001', member_level: 'VIP' },
+            logistics: { carrier: '顺丰', tracking_no: 'SF123', status: '运输中' },
+            refund: { status: '无', refund: null },
+            tickets: [{ id: 't1', status: 'open', summary: '催物流' }],
+          }),
+        }
+      }
+      return { ok: true, json: async () => [] }
+    }))
+
+    const wrapper = mount(AgentDeskView)
+    await flushPromises()
+    await wrapper.find('.conv-item').trigger('click')
+    await flushPromises()
+
+    wrapper.vm.orderLookupId = '20260531002'
+    await wrapper.vm.lookupOrder()
+    await flushPromises()
+
+    expect(fetch).toHaveBeenCalledWith(
+      'http://localhost:8000/agent-desk/orders/20260531002',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer token-1' }),
+      }),
+    )
+    expect(wrapper.find('.order-lookup').text()).toContain('20260531002')
+    expect(wrapper.find('.order-lookup').text()).toContain('张三')
+    expect(wrapper.find('.order-lookup').text()).toContain('顺丰')
+    expect(wrapper.find('.order-lookup').text()).toContain('SF123')
+    expect(wrapper.find('.order-lookup').text()).toContain('催物流')
+  })
 })
