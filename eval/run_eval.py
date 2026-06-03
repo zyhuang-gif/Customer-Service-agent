@@ -57,6 +57,14 @@ def extract_tools(events: list[dict]) -> list[str]:
     for event in events:
         if event.get("tool_name"):
             tools.append(event["tool_name"])
+        trace = event.get("agent_trace")
+        if isinstance(trace, list):
+            for step in trace:
+                if not isinstance(step, dict):
+                    continue
+                action = step.get("action")
+                if action and action not in ("route", "respond"):
+                    tools.append(action)
         for key in ("tool_calls", "tools", "steps"):
             value = event.get(key)
             if not isinstance(value, list):
@@ -71,6 +79,17 @@ def extract_tools(events: list[dict]) -> list[str]:
     return tools
 
 
+def _dedupe(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
 def actual_outcome(events: list[dict]) -> dict:
     seen = event_types(events)
     text = event_text(events)
@@ -83,7 +102,7 @@ def actual_outcome(events: list[dict]) -> dict:
     )
     return {
         "event_types": seen,
-        "tools": extract_tools(events),
+        "tools": _dedupe(extract_tools(events)),
         "ai_resolution": "response" in seen and not awaiting and not handoff,
         "handoff": handoff,
         "knowledge_hit": any(
@@ -141,6 +160,9 @@ def evaluate_case(case: dict, events: list[dict]) -> dict:
         "actual_handoff": actual["handoff"],
         "actual_knowledge_hit": actual["knowledge_hit"],
         "high_risk_misexecuted": high_risk_misexecuted,
+        "actual_awaiting_confirmation": actual["awaiting_confirmation"],
+        "expected_high_risk": bool(high_risk_tools),
+        "expected_knowledge_hit": expect.get("knowledge_hit"),
     }
 
 
@@ -150,6 +172,8 @@ def _rate(count: int, total: int) -> float:
 
 def build_metrics(results: list[dict]) -> dict:
     total = len(results)
+    high_risk_results = [r for r in results if r.get("expected_high_risk")]
+    knowledge_gap_results = [r for r in results if r.get("expected_knowledge_hit") is False]
     return {
         "case_pass_rate": _rate(sum(1 for r in results if r["passed"]), total),
         "intent_accuracy": _rate(sum(1 for r in results if r["intent_correct"]), total),
@@ -158,7 +182,60 @@ def build_metrics(results: list[dict]) -> dict:
         "handoff_rate": _rate(sum(1 for r in results if r["actual_handoff"]), total),
         "knowledge_hit_rate": _rate(sum(1 for r in results if r["actual_knowledge_hit"]), total),
         "high_risk_misexecution_count": sum(1 for r in results if r["high_risk_misexecuted"]),
+        "high_risk_block_rate": _rate(
+            sum(1 for r in high_risk_results if r.get("actual_awaiting_confirmation")),
+            len(high_risk_results),
+        ),
+        "knowledge_gap_accuracy": _rate(
+            sum(1 for r in knowledge_gap_results if not r.get("actual_knowledge_hit")),
+            len(knowledge_gap_results),
+        ),
     }
+
+
+def _percent(value: float) -> str:
+    return f"{value * 100:.1f}%"
+
+
+def build_markdown_report(report: dict) -> str:
+    metrics = report.get("metrics", {})
+    lines = [
+        "# Customer Service Agent Eval Report",
+        "",
+        f"Passed: {report.get('passed', 0)} / {report.get('total', 0)}",
+        "",
+        "## Metrics",
+        "",
+    ]
+    for key, value in metrics.items():
+        display = _percent(value) if isinstance(value, float) else str(value)
+        lines.append(f"- `{key}`: {display}")
+
+    failed = [r for r in report.get("results", []) if not r.get("passed")]
+    lines.extend(["", "## Failed Cases", ""])
+    if not failed:
+        lines.append("All cases passed.")
+    for result in failed:
+        lines.append(f"### {result.get('id', '')}")
+        if result.get("error"):
+            lines.append(f"- Error: {result['error']}")
+        missing = result.get("missing_event_types") or []
+        if missing:
+            lines.append(f"- Missing events: {', '.join(missing)}")
+        expected = result.get("expected_tools") or []
+        observed = result.get("observed_tools") or []
+        if expected or observed:
+            lines.append(f"- Expected tools: {', '.join(expected) if expected else '-'}")
+            lines.append(f"- Observed tools: {', '.join(observed) if observed else '-'}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_markdown_report(report: dict, path: str | Path) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(build_markdown_report(report), encoding="utf-8")
 
 
 def run_case(base_url: str, case: dict, timeout: float) -> dict:
@@ -176,6 +253,11 @@ def main() -> int:
     parser.add_argument("--base-url", default="http://localhost:8000")
     parser.add_argument("--cases", default=str(Path(__file__).with_name("cases.json")))
     parser.add_argument("--timeout", type=float, default=180.0)
+    parser.add_argument(
+        "--report-md",
+        default="",
+        help="Optional path to write a Markdown eval report, e.g. docs/verification/latest-eval-report.md",
+    )
     args = parser.parse_args()
 
     cases = json.loads(Path(args.cases).read_text(encoding="utf-8"))
@@ -208,6 +290,8 @@ def main() -> int:
         "metrics": build_metrics(results),
         "results": results,
     }
+    if args.report_md:
+        write_markdown_report(report, args.report_md)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if passed == len(results) else 1
 

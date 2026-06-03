@@ -1,6 +1,8 @@
+import tempfile
 import unittest
+from pathlib import Path
 
-from run_eval import build_metrics, evaluate_case, parse_sse
+from run_eval import build_markdown_report, build_metrics, evaluate_case, parse_sse, write_markdown_report
 
 
 class RunEvalTest(unittest.TestCase):
@@ -43,6 +45,9 @@ class RunEvalTest(unittest.TestCase):
                 "actual_handoff": False,
                 "actual_knowledge_hit": True,
                 "high_risk_misexecuted": False,
+                "expected_high_risk": True,
+                "actual_awaiting_confirmation": True,
+                "expected_knowledge_hit": True,
             },
             {
                 "passed": False,
@@ -52,6 +57,9 @@ class RunEvalTest(unittest.TestCase):
                 "actual_handoff": True,
                 "actual_knowledge_hit": False,
                 "high_risk_misexecuted": True,
+                "expected_high_risk": True,
+                "actual_awaiting_confirmation": False,
+                "expected_knowledge_hit": False,
             },
         ]
 
@@ -64,6 +72,74 @@ class RunEvalTest(unittest.TestCase):
         self.assertEqual(metrics["handoff_rate"], 0.5)
         self.assertEqual(metrics["knowledge_hit_rate"], 0.5)
         self.assertEqual(metrics["high_risk_misexecution_count"], 1)
+        self.assertEqual(metrics["high_risk_block_rate"], 0.5)
+        self.assertEqual(metrics["knowledge_gap_accuracy"], 1.0)
+
+    def test_evaluate_case_reads_tools_from_agent_trace(self):
+        case = {
+            "id": "faq",
+            "expect": {
+                "event_types": ["start", "response", "done"],
+                "tools": ["search_knowledge"],
+                "knowledge_hit": True,
+            },
+        }
+        events = [
+            {"type": "start"},
+            {
+                "type": "response",
+                "content": "根据退款政策回答。",
+                "agent_trace": [
+                    {"agent": "CoordinatorAgent", "action": "route"},
+                    {"agent": "KnowledgeAgent", "action": "search_knowledge"},
+                    {"agent": "CoordinatorAgent", "action": "respond"},
+                ],
+                "citations": [{"title": "退款政策", "source": "refund.md"}],
+            },
+            {"type": "done"},
+        ]
+
+        result = evaluate_case(case, events)
+
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["observed_tools"], ["search_knowledge"])
+
+    def test_markdown_report_contains_summary_and_failed_cases(self):
+        report = {
+            "passed": 1,
+            "total": 2,
+            "metrics": {
+                "case_pass_rate": 0.5,
+                "tool_call_accuracy": 0.5,
+                "high_risk_block_rate": 1.0,
+                "knowledge_gap_accuracy": 1.0,
+            },
+            "results": [
+                {"id": "ok", "passed": True, "missing_event_types": [], "expected_tools": [], "observed_tools": []},
+                {
+                    "id": "bad",
+                    "passed": False,
+                    "missing_event_types": ["done"],
+                    "expected_tools": ["search_knowledge"],
+                    "observed_tools": [],
+                    "error": "timeout",
+                },
+            ],
+        }
+
+        md = build_markdown_report(report)
+
+        self.assertIn("# Customer Service Agent Eval Report", md)
+        self.assertIn("Passed: 1 / 2", md)
+        self.assertIn("bad", md)
+        self.assertIn("timeout", md)
+
+    def test_write_markdown_report_creates_parent_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "docs" / "verification" / "latest-eval-report.md"
+            write_markdown_report({"passed": 0, "total": 0, "metrics": {}, "results": []}, target)
+
+            self.assertTrue(target.exists())
 
 
 if __name__ == "__main__":

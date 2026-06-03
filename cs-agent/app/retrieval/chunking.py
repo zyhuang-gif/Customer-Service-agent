@@ -25,3 +25,11 @@ def chunk_markdown(md: str, source: str) -> list[dict]:
                 current_lines.append(line)
     flush()
     return chunks
+
+
+def chunk_text(text: str, source: str) -> list[dict]:
+    content = text.strip()
+    if not content:
+        return []
+    title = source.rsplit(".", 1)[0]
+    return [{"title": title, "source": source, "text": content}]

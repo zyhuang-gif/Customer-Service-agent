@@ -12,6 +12,7 @@ from app.routers import (
     confirm_router,
     conversation_router,
     dashboard_router,
+    knowledge_router,
 )
 
 
@@ -46,6 +47,7 @@ app.include_router(chat_router.router)
 app.include_router(confirm_router.router)
 app.include_router(conversation_router.router)
 app.include_router(dashboard_router.router)
+app.include_router(knowledge_router.router)
 
 
 @app.get("/health/live")

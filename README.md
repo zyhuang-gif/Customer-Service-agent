@@ -180,7 +180,28 @@ cd cs-agent
 python eval\run_eval.py --base-url http://localhost:8000
 ```
 
-这个脚本是轻量冒烟评测，适合验证真实服务链路是否还能跑通；更细的答案质量评分可以在此基础上扩展。
+也可以生成 Markdown 报告：
+
+```powershell
+python eval\run_eval.py --base-url http://localhost:8000 --report-md docs\verification\latest-eval-report.md
+```
+
+这个脚本是轻量冒烟评测，适合验证真实服务链路是否还能跑通；报告会汇总通过率、工具调用准确率、高风险拦截率、知识缺口识别率和失败用例明细。
+
+## 知识库管理
+
+第一版知识库管理 API 使用 JSON 上传 Markdown/TXT 文档，无需额外 multipart 依赖：
+
+```powershell
+curl -X POST http://localhost:8000/knowledge/documents `
+  -H "Content-Type: application/json" `
+  -d "{\"file_name\":\"退款政策.md\",\"content\":\"# 退款政策\n\n## 退款到账时间\n银行卡退款通常需要 1-5 个工作日到账。\"}"
+```
+
+常用接口：
+
+- `GET /knowledge/documents`：查看已上传知识文档。
+- `POST /knowledge/reindex`：强制重建 Chroma 索引。
 
 ## 前端（web）
 

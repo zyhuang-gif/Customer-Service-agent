@@ -12,8 +12,18 @@ class VectorStore:
     def __init__(self, embed_fn: EmbedFn, persist_dir: str, collection: str = "knowledge"):
         self.embed_fn = embed_fn
         self.client = chromadb.PersistentClient(path=persist_dir)
+        self.collection_name = collection
         self.collection = self.client.get_or_create_collection(
             name=collection, metadata={"hnsw:space": "cosine"}
+        )
+
+    def reset(self) -> None:
+        try:
+            self.client.delete_collection(self.collection_name)
+        except Exception:  # noqa: BLE001 - Chroma raises if the collection is absent.
+            pass
+        self.collection = self.client.get_or_create_collection(
+            name=self.collection_name, metadata={"hnsw:space": "cosine"}
         )
 
     def add_chunks(self, chunks: list[dict]) -> None:
@@ -21,7 +31,8 @@ class VectorStore:
             return
         texts = [c["text"] for c in chunks]
         embeddings = self.embed_fn(texts)
-        ids = [f"chunk-{i}" for i in range(len(chunks))]
+        start = self.collection.count()
+        ids = [f"chunk-{start + i}" for i in range(len(chunks))]
         metadatas = [{"title": c["title"], "source": c["source"]} for c in chunks]
         self.collection.add(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
 
