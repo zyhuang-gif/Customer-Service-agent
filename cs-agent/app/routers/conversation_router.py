@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from app.conversation_activity import add_message
 from app.db import get_db
 from app.models import Conversation, Message
 from app.routers.auth_router import current_user
@@ -77,13 +78,13 @@ def agent_reply(
         raise HTTPException(status_code=400, detail="回复内容不能为空")
 
     conv.assigned_agent_id = user.id
-    msg = Message(
-        conversation_id=conversation_id,
-        role="agent",
-        content=content,
-        meta={"agent_id": user.id, "agent_name": user.display_name or user.username},
+    msg = add_message(
+        db,
+        conversation_id,
+        "agent",
+        content,
+        {"agent_id": user.id, "agent_name": user.display_name or user.username},
     )
-    db.add(msg)
     db.commit()
     db.refresh(msg)
     return {

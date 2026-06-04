@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.audit import audit
 from app.agent.routing import route_customer_message
+from app.conversation_activity import add_message
 from app.insights import analyze_sentiment, build_handoff_summary
 from app.models import Conversation, Message, PendingAction
 
@@ -243,12 +244,13 @@ class ConversationService:
     def start_turn(self, conversation_id: str, user_text: str) -> dict[str, Any]:
         sentiment_meta = analyze_sentiment(user_text)
         decision = route_customer_message(user_text)
-        self.db.add(Message(
-            conversation_id=conversation_id,
-            role="customer",
-            content=user_text,
-            meta={**sentiment_meta, "coordinator_decision": decision},
-        ))
+        add_message(
+            self.db,
+            conversation_id,
+            "customer",
+            user_text,
+            {**sentiment_meta, "coordinator_decision": decision},
+        )
         self.db.commit()
 
         if sentiment_meta["handoff_requested"]:
@@ -307,7 +309,7 @@ class ConversationService:
             "citations": citations,
             "agent_trace": agent_trace,
         }
-        self.db.add(Message(conversation_id=conversation_id, role="ai", content=ai_text, meta=meta))
+        add_message(self.db, conversation_id, "ai", ai_text, meta)
         self.db.commit()
         return {
             "status": "ai_handling",
@@ -334,7 +336,7 @@ class ConversationService:
             audit(self.db, actor=str(reviewer_id), action_type="reject", conversation_id=pa.conversation_id,
                   tool_name=pa.tool_name, params=pa.params, status="rejected")
             ai_text = "坐席已驳回该操作申请，未执行退款、改地址或发券。建议先为您转人工继续处理，或改为创建普通工单跟进。"
-            self.db.add(Message(conversation_id=pa.conversation_id, role="ai", content=ai_text))
+            add_message(self.db, pa.conversation_id, "ai", ai_text)
             conv.status = "ai_handling"
             self.db.commit()
             return {"status": conv.status, "pending_status": pa.status, "message": ai_text}
@@ -353,7 +355,7 @@ class ConversationService:
             audit(self.db, actor=str(reviewer_id), action_type="confirm", conversation_id=pa.conversation_id,
                   tool_name=pa.tool_name, params=pa.params, result=pa.result, risk_level="high_write", status=status)
             ai_text = self._approved_message(pa, status)
-        self.db.add(Message(conversation_id=pa.conversation_id, role="ai", content=ai_text))
+        add_message(self.db, pa.conversation_id, "ai", ai_text)
         conv.status = "ai_handling"
         self.db.commit()
         return {"status": conv.status, "pending_status": pa.status, "message": ai_text}

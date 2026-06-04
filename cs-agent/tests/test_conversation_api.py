@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from app.auth import hash_password
 from app.models import Conversation, Message, User
 
@@ -55,7 +57,13 @@ def test_get_conversation_messages(client, db_session):
 
 def test_agent_reply_to_human_conversation(client, db_session):
     h = _login(client, db_session)
-    db_session.add(Conversation(id="c1", customer_ref="138", status="human_handling"))
+    previous_activity = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    db_session.add(Conversation(
+        id="c1",
+        customer_ref="138",
+        status="human_handling",
+        last_message_at=previous_activity,
+    ))
     db_session.add(Message(conversation_id="c1", role="customer", content="我要转人工"))
     db_session.commit()
 
@@ -70,6 +78,8 @@ def test_agent_reply_to_human_conversation(client, db_session):
     rows = db_session.query(Message).filter_by(conversation_id="c1").order_by(Message.id).all()
     assert rows[-1].role == "agent"
     assert rows[-1].content == "您好，我来继续处理。"
+    conversation = db_session.get(Conversation, "c1")
+    assert conversation.last_message_at.replace(tzinfo=timezone.utc) > previous_activity
 
 
 def test_agent_reply_rejects_non_human_conversation(client, db_session):
