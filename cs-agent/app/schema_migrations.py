@@ -106,6 +106,13 @@ def ensure_conversation_last_message_at(engine: Engine) -> None:
                 )
             _create_sqlite_not_null_triggers(connection)
 
+        _create_customer_conversation_indexes(
+            connection,
+            is_postgres=is_postgres,
+            conversation_columns=column_names | {"last_message_at"},
+            messages_exist=messages_exist,
+        )
+
 
 @contextmanager
 def _migration_transaction(engine: Engine, is_postgres: bool):
@@ -165,3 +172,59 @@ def _create_sqlite_not_null_triggers(connection: Connection) -> None:
             """
         )
     )
+
+
+def _create_customer_conversation_indexes(
+    connection: Connection,
+    *,
+    is_postgres: bool,
+    conversation_columns: set[str],
+    messages_exist: bool,
+) -> None:
+    if {"id", "customer_ref", "last_message_at"} <= conversation_columns:
+        _create_index(
+            connection,
+            is_postgres=is_postgres,
+            table_name="conversations",
+            index_name="ix_conversations_customer_recent",
+            columns="customer_ref, last_message_at, id",
+        )
+
+    if messages_exist:
+        message_columns = {
+            column["name"] for column in inspect(connection).get_columns("messages")
+        }
+        if {"id", "conversation_id", "created_at"} <= message_columns:
+            _create_index(
+                connection,
+                is_postgres=is_postgres,
+                table_name="messages",
+                index_name="ix_messages_conversation_created",
+                columns="conversation_id, created_at, id",
+            )
+
+
+def _create_index(
+    connection: Connection,
+    *,
+    is_postgres: bool,
+    table_name: str,
+    index_name: str,
+    columns: str,
+) -> None:
+    if is_postgres:
+        connection.execute(
+            text(
+                f"CREATE INDEX IF NOT EXISTS {index_name} "
+                f"ON {table_name} ({columns})"
+            )
+        )
+        return
+
+    index_names = {
+        index["name"] for index in inspect(connection).get_indexes(table_name)
+    }
+    if index_name not in index_names:
+        connection.execute(
+            text(f"CREATE INDEX {index_name} ON {table_name} ({columns})")
+        )

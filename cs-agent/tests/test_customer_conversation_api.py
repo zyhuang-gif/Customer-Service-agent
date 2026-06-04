@@ -106,9 +106,51 @@ def test_list_customer_conversations_filters_owner_and_sorts_stably(client, db_s
         "id": "conv-a",
         "status": "resolved",
         "summary": "已解决",
-        "created_at": older.isoformat(),
-        "last_message_at": newer.isoformat(),
+        "created_at": f"{older.isoformat()}Z",
+        "last_message_at": f"{newer.isoformat()}Z",
     }
+
+
+def test_list_customer_conversations_has_default_limit_and_supports_pagination(
+    client, db_session
+):
+    created_at = datetime(2026, 6, 4, 8, 0)
+    for index in range(105):
+        _add_conversation(
+            db_session,
+            f"conv-{index:03d}",
+            last_message_at=created_at + timedelta(minutes=index),
+        )
+    db_session.commit()
+
+    default_response = client.get(
+        "/customer/conversations",
+        headers=_customer_headers(),
+    )
+    page_response = client.get(
+        "/customer/conversations?offset=2&limit=3",
+        headers=_customer_headers(),
+    )
+
+    assert len(default_response.json()) == 50
+    assert [item["id"] for item in page_response.json()] == [
+        "conv-102",
+        "conv-101",
+        "conv-100",
+    ]
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["offset=-1", "limit=0", "limit=101"],
+)
+def test_list_customer_conversations_rejects_invalid_pagination(client, query):
+    response = client.get(
+        f"/customer/conversations?{query}",
+        headers=_customer_headers(),
+    )
+
+    assert response.status_code == 422
 
 
 def test_recent_customer_conversation_returns_null_without_history(client):
@@ -151,11 +193,32 @@ def test_recent_customer_conversation_uses_inclusive_two_hour_window(
             "id": "conv-recent",
             "status": "ai_handling",
             "summary": "",
-            "created_at": last_message_at.isoformat(),
-            "last_message_at": last_message_at.isoformat(),
+            "created_at": f"{last_message_at.isoformat()}Z",
+            "last_message_at": f"{last_message_at.isoformat()}Z",
         },
         "should_resume": should_resume,
     }
+
+
+def test_recent_customer_conversation_uses_configured_resume_hours(
+    client, db_session, monkeypatch
+):
+    now = datetime(2026, 6, 4, 12, 0, tzinfo=timezone.utc)
+    _add_conversation(
+        db_session,
+        "conv-configured",
+        last_message_at=(now - timedelta(hours=3)).replace(tzinfo=None),
+    )
+    db_session.commit()
+
+    import app.routers.customer_conversation_router as customer_router
+
+    monkeypatch.setattr(customer_router, "utc_now", lambda: now)
+    monkeypatch.setattr(settings, "customer_resume_hours", 4)
+
+    response = client.get("/customer/conversations/recent", headers=_customer_headers())
+
+    assert response.json()["should_resume"] is True
 
 
 def test_customer_messages_return_owned_messages_in_stable_order_with_meta(
@@ -192,16 +255,77 @@ def test_customer_messages_return_owned_messages_in_stable_order_with_meta(
             "role": "customer",
             "content": "订单在哪里？",
             "meta": {"source": "web"},
-            "created_at": created_at.isoformat(),
+            "created_at": f"{created_at.isoformat()}Z",
         },
         {
             "id": second.id,
             "role": "ai",
             "content": "正在查询。",
             "meta": {"tool": "order_lookup"},
-            "created_at": created_at.isoformat(),
+            "created_at": f"{created_at.isoformat()}Z",
         },
     ]
+
+
+def test_customer_messages_have_default_limit_and_support_pagination(client, db_session):
+    created_at = datetime(2026, 6, 4, 9, 0)
+    _add_conversation(db_session, "conv-many", last_message_at=created_at)
+    db_session.add_all(
+        [
+            Message(
+                conversation_id="conv-many",
+                role="customer",
+                content=f"message-{index:03d}",
+                created_at=created_at + timedelta(seconds=index),
+            )
+            for index in range(205)
+        ]
+    )
+    db_session.commit()
+
+    default_response = client.get(
+        "/customer/conversations/conv-many/messages",
+        headers=_customer_headers(),
+    )
+    page_response = client.get(
+        "/customer/conversations/conv-many/messages?offset=2&limit=3",
+        headers=_customer_headers(),
+    )
+
+    assert len(default_response.json()) == 200
+    assert [item["content"] for item in page_response.json()] == [
+        "message-002",
+        "message-003",
+        "message-004",
+    ]
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["offset=-1", "limit=0", "limit=501"],
+)
+def test_customer_messages_reject_invalid_pagination(client, db_session, query):
+    _add_conversation(
+        db_session,
+        "conv-owned",
+        last_message_at=datetime(2026, 6, 4, 9, 0),
+    )
+    db_session.commit()
+
+    response = client.get(
+        f"/customer/conversations/conv-owned/messages?{query}",
+        headers=_customer_headers(),
+    )
+
+    assert response.status_code == 422
+
+
+def test_customer_datetime_serialization_converts_aware_values_to_utc_z():
+    aware = datetime(2026, 6, 4, 17, 0, tzinfo=timezone(timedelta(hours=8)))
+
+    from app.routers.customer_conversation_router import utc_iso
+
+    assert utc_iso(aware) == "2026-06-04T09:00:00Z"
 
 
 @pytest.mark.parametrize("conversation_id", ["conv-other", "missing"])

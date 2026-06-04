@@ -109,6 +109,81 @@ def test_conversation_last_message_at_migration_is_idempotent():
     ] == ["ix_conversations_last_message_at"]
 
 
+def test_migration_adds_customer_conversation_query_indexes_idempotently():
+    engine = create_engine("sqlite://")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE conversations (
+                    id VARCHAR PRIMARY KEY,
+                    customer_ref VARCHAR NOT NULL,
+                    created_at TIMESTAMP NOT NULL,
+                    last_message_at TIMESTAMP NOT NULL
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id VARCHAR NOT NULL,
+                    created_at TIMESTAMP NOT NULL
+                )
+                """
+            )
+        )
+
+    ensure_conversation_last_message_at(engine)
+    ensure_conversation_last_message_at(engine)
+
+    inspector = inspect(engine)
+    conversation_indexes = {
+        index["name"]: index["column_names"]
+        for index in inspector.get_indexes("conversations")
+    }
+    message_indexes = {
+        index["name"]: index["column_names"]
+        for index in inspector.get_indexes("messages")
+    }
+    assert conversation_indexes["ix_conversations_customer_recent"] == [
+        "customer_ref",
+        "last_message_at",
+        "id",
+    ]
+    assert message_indexes["ix_messages_conversation_created"] == [
+        "conversation_id",
+        "created_at",
+        "id",
+    ]
+
+
+def test_models_define_customer_conversation_query_indexes():
+    from app.models import Conversation, Message
+
+    conversation_indexes = {
+        index.name: [column.name for column in index.columns]
+        for index in Conversation.__table__.indexes
+    }
+    message_indexes = {
+        index.name: [column.name for column in index.columns]
+        for index in Message.__table__.indexes
+    }
+
+    assert conversation_indexes["ix_conversations_customer_recent"] == [
+        "customer_ref",
+        "last_message_at",
+        "id",
+    ]
+    assert message_indexes["ix_messages_conversation_created"] == [
+        "conversation_id",
+        "created_at",
+        "id",
+    ]
+
+
 def test_sqlite_concurrent_migrations_both_succeed(tmp_path):
     database_path = tmp_path / "concurrent-migration.db"
     database_url = f"sqlite:///{database_path}"
@@ -207,6 +282,35 @@ def test_sqlite_migration_rejects_direct_null_insert_and_update():
             )
 
 
+def test_sqlite_migration_creates_not_null_triggers_without_messages_table():
+    engine = create_engine("sqlite://")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE conversations (
+                    id VARCHAR PRIMARY KEY,
+                    created_at TIMESTAMP NOT NULL
+                )
+                """
+            )
+        )
+
+    ensure_conversation_last_message_at(engine)
+
+    with engine.connect() as connection:
+        trigger_names = {
+            row[0]
+            for row in connection.execute(
+                text("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+            )
+        }
+    assert trigger_names == {
+        "trg_conversations_last_message_at_not_null_insert",
+        "trg_conversations_last_message_at_not_null_update",
+    }
+
+
 def test_lifespan_propagates_migration_failure_after_create_all_succeeds(monkeypatch):
     engine = object()
     monkeypatch.setattr(main_module, "get_engine", lambda: engine)
@@ -232,7 +336,11 @@ class _PostgresInspector:
         return table_name in {"conversations", "messages"}
 
     def get_columns(self, table_name):
-        return [{"name": "id"}, {"name": "created_at"}]
+        columns = {
+            "conversations": ["id", "customer_ref", "created_at"],
+            "messages": ["id", "conversation_id", "created_at"],
+        }
+        return [{"name": name} for name in columns[table_name]]
 
     def get_indexes(self, table_name):
         return []
@@ -293,3 +401,13 @@ def test_postgres_migration_locks_then_reinspects_and_uses_safe_ddl(monkeypatch)
     assert any("ADD COLUMN IF NOT EXISTS last_message_at" in sql for sql in executed_sql)
     assert any("ALTER COLUMN last_message_at SET NOT NULL" in sql for sql in executed_sql)
     assert any("CREATE INDEX IF NOT EXISTS ix_conversations_last_message_at" in sql for sql in executed_sql)
+    assert any(
+        "CREATE INDEX IF NOT EXISTS ix_conversations_customer_recent "
+        "ON conversations (customer_ref, last_message_at, id)" in sql
+        for sql in executed_sql
+    )
+    assert any(
+        "CREATE INDEX IF NOT EXISTS ix_messages_conversation_created "
+        "ON messages (conversation_id, created_at, id)" in sql
+        for sql in executed_sql
+    )

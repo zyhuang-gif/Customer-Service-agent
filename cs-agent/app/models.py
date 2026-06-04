@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -24,6 +24,14 @@ class User(Base):
 
 class Conversation(Base):
     __tablename__ = "conversations"
+    __table_args__ = (
+        Index(
+            "ix_conversations_customer_recent",
+            "customer_ref",
+            "last_message_at",
+            "id",
+        ),
+    )
     id: Mapped[str] = mapped_column(String, primary_key=True)
     customer_ref: Mapped[str] = mapped_column(String, index=True)
     channel: Mapped[str] = mapped_column(String, default="web")
@@ -37,6 +45,14 @@ class Conversation(Base):
 
 class Message(Base):
     __tablename__ = "messages"
+    __table_args__ = (
+        Index(
+            "ix_messages_conversation_created",
+            "conversation_id",
+            "created_at",
+            "id",
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"), index=True)
     role: Mapped[str] = mapped_column(String)
