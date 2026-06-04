@@ -13,6 +13,7 @@ from app.routers import (
     confirm_router,
     conversation_router,
     customer_auth_router,
+    customer_conversation_router,
     dashboard_router,
     knowledge_router,
 )
@@ -48,6 +49,7 @@ app.add_middleware(
 
 app.include_router(auth_router.router)
 app.include_router(customer_auth_router.router)
+app.include_router(customer_conversation_router.router)
 app.include_router(agent_desk_router.router)
 app.include_router(chat_router.router)
 app.include_router(confirm_router.router)
