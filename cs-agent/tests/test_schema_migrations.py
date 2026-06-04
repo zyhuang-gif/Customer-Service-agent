@@ -1,5 +1,11 @@
+import asyncio
+from contextlib import contextmanager
+
+import pytest
 from sqlalchemy import create_engine, inspect, text
 
+import app.main as main_module
+import app.schema_migrations as schema_migrations
 from app.schema_migrations import ensure_conversation_last_message_at
 
 
@@ -68,10 +74,17 @@ def test_adds_last_message_at_and_backfills_from_latest_message_or_created_at():
                 text("SELECT id, last_message_at FROM conversations")
             ).all()
         )
+        null_count = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM conversations "
+                "WHERE last_message_at IS NULL"
+            )
+        ).scalar_one()
     assert rows == {
         "with-messages": "2026-01-01 10:45:00",
         "without-messages": "2026-01-02 10:00:00",
     }
+    assert null_count == 0
 
 
 def test_conversation_last_message_at_migration_is_idempotent():
@@ -92,3 +105,91 @@ def test_conversation_last_message_at_migration_is_idempotent():
         for index in inspector.get_indexes("conversations")
         if index["name"] == "ix_conversations_last_message_at"
     ] == ["ix_conversations_last_message_at"]
+
+
+def test_lifespan_propagates_migration_failure_after_create_all_succeeds(monkeypatch):
+    engine = object()
+    monkeypatch.setattr(main_module, "get_engine", lambda: engine)
+    monkeypatch.setattr(
+        main_module.Base.metadata, "create_all", lambda bind: None
+    )
+    monkeypatch.setattr(
+        main_module,
+        "ensure_conversation_last_message_at",
+        lambda engine: (_ for _ in ()).throw(RuntimeError("migration failed")),
+    )
+
+    async def run_lifespan():
+        async with main_module.lifespan(main_module.app):
+            pass
+
+    with pytest.raises(RuntimeError, match="migration failed"):
+        asyncio.run(run_lifespan())
+
+
+class _PostgresInspector:
+    def has_table(self, table_name):
+        return table_name in {"conversations", "messages"}
+
+    def get_columns(self, table_name):
+        return [{"name": "id"}, {"name": "created_at"}]
+
+    def get_indexes(self, table_name):
+        return []
+
+
+class _PostgresConnection:
+    def __init__(self, events):
+        self.events = events
+
+    def execute(self, statement):
+        sql = " ".join(str(statement).split())
+        self.events.append(("execute", sql))
+        if sql.startswith("SELECT COUNT(*)"):
+            return _ScalarResult(0)
+
+
+class _ScalarResult:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one(self):
+        return self.value
+
+
+class _PostgresEngine:
+    class _Dialect:
+        name = "postgresql"
+
+    dialect = _Dialect()
+
+    def __init__(self, events):
+        self.events = events
+        self.connection = _PostgresConnection(events)
+
+    @contextmanager
+    def begin(self):
+        self.events.append(("begin", None))
+        yield self.connection
+
+
+def test_postgres_migration_locks_then_reinspects_and_uses_safe_ddl(monkeypatch):
+    events = []
+    engine = _PostgresEngine(events)
+
+    def fake_inspect(bind):
+        events.append(("inspect", bind))
+        return _PostgresInspector()
+
+    monkeypatch.setattr(schema_migrations, "inspect", fake_inspect)
+
+    ensure_conversation_last_message_at(engine)
+
+    assert events[0] == ("begin", None)
+    assert events[1][0] == "execute"
+    assert "pg_advisory_xact_lock" in events[1][1]
+    assert events[2] == ("inspect", engine.connection)
+    executed_sql = [sql for event, sql in events if event == "execute"]
+    assert any("ADD COLUMN IF NOT EXISTS last_message_at" in sql for sql in executed_sql)
+    assert any("ALTER COLUMN last_message_at SET NOT NULL" in sql for sql in executed_sql)
+    assert any("CREATE INDEX IF NOT EXISTS ix_conversations_last_message_at" in sql for sql in executed_sql)

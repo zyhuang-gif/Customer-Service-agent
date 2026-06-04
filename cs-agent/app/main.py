@@ -22,9 +22,10 @@ async def lifespan(app: FastAPI):
     try:
         engine = get_engine()
         Base.metadata.create_all(bind=engine)
-        ensure_conversation_last_message_at(engine)
     except Exception:
         pass
+    else:
+        ensure_conversation_last_message_at(engine)
     # 预热：提前灌知识库 + 构造图/checkpointer，避免首个 /chat 请求超时。
     # 失败不阻断启动（如测试环境无 Postgres/无 key）。测试会 monkeypatch warmup。
     try:
