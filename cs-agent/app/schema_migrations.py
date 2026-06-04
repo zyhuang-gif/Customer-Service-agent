@@ -1,11 +1,13 @@
+from contextlib import contextmanager
+
 from sqlalchemy import inspect, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 
 def ensure_conversation_last_message_at(engine: Engine) -> None:
     is_postgres = engine.dialect.name == "postgresql"
 
-    with engine.begin() as connection:
+    with _migration_transaction(engine, is_postgres) as connection:
         if is_postgres:
             connection.execute(
                 text(
@@ -102,3 +104,64 @@ def ensure_conversation_last_message_at(engine: Engine) -> None:
                         "ON conversations (last_message_at)"
                     )
                 )
+            _create_sqlite_not_null_triggers(connection)
+
+
+@contextmanager
+def _migration_transaction(engine: Engine, is_postgres: bool):
+    if is_postgres:
+        with engine.begin() as connection:
+            yield connection
+    else:
+        with _sqlite_exclusive(engine) as connection:
+            yield connection
+
+
+@contextmanager
+def _sqlite_exclusive(engine: Engine):
+    with engine.connect() as connection:
+        connection.exec_driver_sql("BEGIN EXCLUSIVE")
+        try:
+            yield connection
+        except Exception:
+            connection.rollback()
+            raise
+        else:
+            connection.commit()
+
+
+def _create_sqlite_not_null_triggers(connection: Connection) -> None:
+    connection.execute(
+        text(
+            """
+            CREATE TRIGGER IF NOT EXISTS
+                trg_conversations_last_message_at_not_null_insert
+            BEFORE INSERT ON conversations
+            FOR EACH ROW
+            WHEN NEW.last_message_at IS NULL
+            BEGIN
+                SELECT RAISE(
+                    ABORT,
+                    'conversations.last_message_at must not be null'
+                );
+            END
+            """
+        )
+    )
+    connection.execute(
+        text(
+            """
+            CREATE TRIGGER IF NOT EXISTS
+                trg_conversations_last_message_at_not_null_update
+            BEFORE UPDATE OF last_message_at ON conversations
+            FOR EACH ROW
+            WHEN NEW.last_message_at IS NULL
+            BEGIN
+                SELECT RAISE(
+                    ABORT,
+                    'conversations.last_message_at must not be null'
+                );
+            END
+            """
+        )
+    )

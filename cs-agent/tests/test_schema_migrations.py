@@ -1,8 +1,10 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 
 import pytest
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import IntegrityError
 
 import app.main as main_module
 import app.schema_migrations as schema_migrations
@@ -105,6 +107,104 @@ def test_conversation_last_message_at_migration_is_idempotent():
         for index in inspector.get_indexes("conversations")
         if index["name"] == "ix_conversations_last_message_at"
     ] == ["ix_conversations_last_message_at"]
+
+
+def test_sqlite_concurrent_migrations_both_succeed(tmp_path):
+    database_path = tmp_path / "concurrent-migration.db"
+    database_url = f"sqlite:///{database_path}"
+    setup_engine = create_engine(database_url)
+    _create_legacy_schema(setup_engine)
+    with setup_engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO conversations (id, created_at)
+                VALUES ('conversation-1', '2026-01-01 09:00:00')
+                """
+            )
+        )
+    setup_engine.dispose()
+
+    engines = [
+        create_engine(database_url, connect_args={"timeout": 10}),
+        create_engine(database_url, connect_args={"timeout": 10}),
+    ]
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(
+                executor.map(ensure_conversation_last_message_at, engines)
+            )
+        assert results == [None, None]
+
+        inspector = inspect(engines[0])
+        assert "last_message_at" in {
+            column["name"] for column in inspector.get_columns("conversations")
+        }
+        assert "ix_conversations_last_message_at" in {
+            index["name"] for index in inspector.get_indexes("conversations")
+        }
+        with engines[0].connect() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT last_message_at FROM conversations "
+                    "WHERE id = 'conversation-1'"
+                )
+            ).scalar_one() == "2026-01-01 09:00:00"
+            trigger_names = {
+                row[0]
+                for row in connection.execute(
+                    text(
+                        "SELECT name FROM sqlite_master "
+                        "WHERE type = 'trigger'"
+                    )
+                )
+            }
+        assert trigger_names == {
+            "trg_conversations_last_message_at_not_null_insert",
+            "trg_conversations_last_message_at_not_null_update",
+        }
+    finally:
+        for engine in engines:
+            engine.dispose()
+
+
+def test_sqlite_migration_rejects_direct_null_insert_and_update():
+    engine = create_engine("sqlite://")
+    _create_legacy_schema(engine)
+    ensure_conversation_last_message_at(engine)
+
+    with pytest.raises(IntegrityError, match="last_message_at must not be null"):
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO conversations (id, created_at, last_message_at)
+                    VALUES ('null-insert', '2026-01-01 09:00:00', NULL)
+                    """
+                )
+            )
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO conversations (id, created_at, last_message_at)
+                VALUES (
+                    'null-update',
+                    '2026-01-01 09:00:00',
+                    '2026-01-01 09:00:00'
+                )
+                """
+            )
+        )
+    with pytest.raises(IntegrityError, match="last_message_at must not be null"):
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE conversations SET last_message_at = NULL "
+                    "WHERE id = 'null-update'"
+                )
+            )
 
 
 def test_lifespan_propagates_migration_failure_after_create_all_succeeds(monkeypatch):
