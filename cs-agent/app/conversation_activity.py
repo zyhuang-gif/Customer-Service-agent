@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.models import Conversation, Message
@@ -23,5 +24,15 @@ def add_message(
         meta=meta or {},
     )
     db.add(message)
-    conversation.last_message_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    db.execute(
+        update(Conversation)
+        .where(
+            Conversation.id == conversation_id,
+            Conversation.last_message_at < now,
+        )
+        .values(last_message_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    db.refresh(conversation, attribute_names=["last_message_at"])
     return message
