@@ -154,6 +154,16 @@ def test_anonymous_policy_question_can_chat(client, message):
     assert len(client.service_calls) == 1
 
 
+def test_anonymous_product_model_question_can_chat(client):
+    response = client.post(
+        "/chat",
+        json={"customer_ref": "anonymous", "message": "型号 iPhone15 支持七天无理由吗"},
+    )
+
+    assert [event["type"] for event in _events(response)] == ["start", "response", "done"]
+    assert len(client.service_calls) == 1
+
+
 def test_logged_in_customer_can_chat_about_owned_order(client, monkeypatch):
     _customer_orders(monkeypatch, [{"id": "20260531001"}])
 
@@ -161,6 +171,19 @@ def test_logged_in_customer_can_chat_about_owned_order(client, monkeypatch):
         "/chat",
         headers=_customer_headers(),
         json={"customer_ref": "forged", "message": "查一下订单20260531001的物流"},
+    )
+
+    assert [event["type"] for event in _events(response)] == ["start", "response", "done"]
+    assert len(client.service_calls) == 1
+
+
+def test_logged_in_customer_order_ownership_is_case_insensitive(client, monkeypatch):
+    _customer_orders(monkeypatch, [{"id": "O-ABC123"}])
+
+    response = client.post(
+        "/chat",
+        headers=_customer_headers(),
+        json={"customer_ref": "forged", "message": "查订单o-abc123的物流"},
     )
 
     assert [event["type"] for event in _events(response)] == ["start", "response", "done"]
@@ -227,9 +250,14 @@ def test_order_ownership_service_unavailable_is_safe_and_does_not_call_agent(
     ("message", "expected_ids", "personal"),
     [
         ("订单20260531001和O-ABC123的物流进度", {"20260531001", "O-ABC123"}, True),
+        ("查询订单号ABC123", {"ABC123"}, True),
+        ("帮我看看87654321", {"87654321"}, True),
+        ("帮我看看ABC-123", {"ABC-123"}, True),
+        ("查订单o-abc123", {"O-ABC123"}, True),
         ("退货规则是什么", set(), False),
         ("退款多久到账", set(), False),
         ("这件商品299元", set(), False),
+        ("型号 iPhone15 支持七天无理由吗", set(), False),
         ("手机号是13800000001", set(), False),
         ("今天是2026年6月4日", set(), False),
         ("普通中文内容", set(), False),

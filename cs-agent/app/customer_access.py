@@ -13,7 +13,9 @@ _PERSONAL_PHRASES = (
     "退款进度",
     "退款状态",
 )
-_ORDER_TOKEN = re.compile(r"(?<![A-Za-z0-9-])([A-Za-z0-9][A-Za-z0-9-]{5,63})(?![A-Za-z0-9-])")
+_ORDER_TOKEN = re.compile(r"(?<![A-Za-z0-9-])([A-Za-z0-9][A-Za-z0-9-]{2,63})(?![A-Za-z0-9-])")
+_ORDER_CONTEXT = re.compile(r"(?:订单号|订单|单号)(?:是|为|[:：#])?\s*$")
+_PHONE_CONTEXT = re.compile(r"(?:手机号|手机号码|电话|电话号码)(?:是|为|[:：#])?\s*$")
 
 
 @dataclass(frozen=True)
@@ -22,22 +24,35 @@ class CustomerRequest:
     order_ids: set[str]
 
 
-def _looks_like_order_id(value: str) -> bool:
+def _normalize_order_id(value: str) -> str:
+    return value.upper()
+
+
+def _has_nearby_context(pattern: re.Pattern[str], message: str, token_start: int) -> bool:
+    return bool(pattern.search(message[max(0, token_start - 12) : token_start]))
+
+
+def _looks_like_order_id(value: str, *, has_order_context: bool, has_phone_context: bool) -> bool:
+    if has_order_context:
+        return any(char.isdigit() for char in value)
     if value.isdigit():
-        return value.startswith("20") and len(value) >= 10
-    upper = value.upper()
-    return (
-        upper.startswith("O-")
-        or (any(char.isalpha() for char in value) and any(char.isdigit() for char in value))
-    )
+        return len(value) >= 8 and not has_phone_context
+    if not any(char.isdigit() for char in value):
+        return False
+    upper = _normalize_order_id(value)
+    return "-" in value or upper.startswith(("O", "ORD"))
 
 
 def classify_customer_request(message: str) -> CustomerRequest:
-    order_ids = {
-        match.group(1)
-        for match in _ORDER_TOKEN.finditer(message)
-        if _looks_like_order_id(match.group(1))
-    }
+    order_ids = set()
+    for match in _ORDER_TOKEN.finditer(message):
+        value = match.group(1)
+        if _looks_like_order_id(
+            value,
+            has_order_context=_has_nearby_context(_ORDER_CONTEXT, message, match.start()),
+            has_phone_context=_has_nearby_context(_PHONE_CONTEXT, message, match.start()),
+        ):
+            order_ids.add(_normalize_order_id(value))
     return CustomerRequest(
         is_personal=bool(order_ids) or any(phrase in message for phrase in _PERSONAL_PHRASES),
         order_ids=order_ids,
@@ -50,5 +65,6 @@ def customer_owns_orders(customer_ref: str, order_ids: set[str]) -> bool:
     if not customer:
         return False
     orders = client.list_orders(customer["id"]) or []
-    owned_ids = {str(order.get("id")) for order in orders}
-    return order_ids <= owned_ids
+    owned_ids = {_normalize_order_id(str(order.get("id"))) for order in orders}
+    normalized_order_ids = {_normalize_order_id(order_id) for order_id in order_ids}
+    return normalized_order_ids <= owned_ids
