@@ -13,10 +13,11 @@ _PERSONAL_PHRASES = (
     "退款进度",
     "退款状态",
 )
-_ORDER_REFERENCE = re.compile(
-    r"(?:订单编号|订单号|订单|单号)\s*(?:[:：]\s*)?"
-    r"([A-Za-z0-9][A-Za-z0-9-]{0,63})(?![A-Za-z0-9-])"
+_ORDER_CONTEXT = re.compile(
+    r"(?:订单编号|订单号|订单|单号)(?:\s*(?:是|为|#|[:：]))?\s*"
 )
+_ORDER_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,63}(?![A-Za-z0-9-])")
+_ORDER_SEPARATOR = re.compile(r"(?:\s*(?:和|与|、|,)\s*|\s+)")
 
 
 @dataclass(frozen=True)
@@ -29,11 +30,22 @@ def _normalize_order_id(value: str) -> str:
     return value.upper()
 
 
+def _order_ids_after_context(message: str, start: int) -> set[str]:
+    order_ids = set()
+    position = start
+    while match := _ORDER_ID.match(message, position):
+        order_ids.add(_normalize_order_id(match.group()))
+        separator = _ORDER_SEPARATOR.match(message, match.end())
+        if not separator:
+            break
+        position = separator.end()
+    return order_ids
+
+
 def classify_customer_request(message: str) -> CustomerRequest:
-    order_ids = {
-        _normalize_order_id(match.group(1))
-        for match in _ORDER_REFERENCE.finditer(message)
-    }
+    order_ids = set()
+    for match in _ORDER_CONTEXT.finditer(message):
+        order_ids.update(_order_ids_after_context(message, match.end()))
     return CustomerRequest(
         is_personal=bool(order_ids) or any(phrase in message for phrase in _PERSONAL_PHRASES),
         order_ids=order_ids,

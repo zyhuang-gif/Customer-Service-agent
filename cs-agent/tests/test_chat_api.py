@@ -216,7 +216,8 @@ def test_logged_in_customer_is_denied_for_contextual_foreign_order(client, monke
     "message",
     [
         "查一下订单20260531002的物流",
-        "对比订单20260531001和订单O-FOREIGN-9的退款状态",
+        "对比订单20260531001和O-FOREIGN-9的退款状态",
+        "对比订单号 20260531001、O-FOREIGN-9",
     ],
 )
 def test_logged_in_customer_is_denied_when_any_order_is_foreign(
@@ -271,7 +272,11 @@ def test_order_ownership_service_unavailable_is_safe_and_does_not_call_agent(
 @pytest.mark.parametrize(
     ("message", "expected_ids", "personal"),
     [
-        ("订单20260531001和订单O-ABC123的物流进度", {"20260531001", "O-ABC123"}, True),
+        ("订单20260531001和O-ABC123的物流进度", {"20260531001", "O-ABC123"}, True),
+        ("订单号 A、B 和 C", {"A", "B", "C"}, True),
+        ("订单号是 ABC123", {"ABC123"}, True),
+        ("订单号为ABC123", {"ABC123"}, True),
+        ("订单#ABC123", {"ABC123"}, True),
         ("查询订单号ABC123", {"ABC123"}, True),
         ("查询订单 FOREIGN-ORDER", {"FOREIGN-ORDER"}, True),
         ("订单编号：LETTERS", {"LETTERS"}, True),
