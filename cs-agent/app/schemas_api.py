@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class LoginIn(BaseModel):
@@ -16,8 +16,8 @@ class LoginOut(BaseModel):
 
 
 class CustomerAuthIn(BaseModel):
-    phone: str
-    recent_order_id: str
+    phone: str = Field(min_length=6, max_length=32)
+    recent_order_id: str = Field(min_length=1, max_length=64)
 
     @field_validator("phone", "recent_order_id", mode="before")
     @classmethod

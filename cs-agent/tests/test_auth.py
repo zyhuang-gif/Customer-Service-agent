@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+from jose import jwt
+
 from app.auth import (
     create_access_token,
     create_customer_access_token,
@@ -43,3 +45,20 @@ def test_customer_access_token_contains_customer_claims_and_expires_in_seven_day
     assert datetime.fromtimestamp(payload["exp"], timezone.utc) == expires_at
     assert settings.customer_jwt_expire_days == 7
     assert settings.customer_resume_hours == 2
+    assert settings.customer_auth_rate_limit_attempts == 5
+    assert settings.customer_auth_rate_limit_window_minutes == 15
+
+
+def test_decode_expired_customer_token_returns_none():
+    token = jwt.encode(
+        {
+            "sub": "C1001",
+            "customer_ref": "C1001",
+            "role": "customer",
+            "exp": datetime.now(timezone.utc) - timedelta(seconds=1),
+        },
+        settings.jwt_secret,
+        algorithm="HS256",
+    )
+
+    assert decode_token(token) is None

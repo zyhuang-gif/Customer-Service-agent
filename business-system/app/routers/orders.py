@@ -10,7 +10,12 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 
 @router.get("", response_model=list[OrderOut])
 def list_orders(customer_id: str = Query(...), db: Session = Depends(get_db)):
-    return db.query(Order).filter(Order.customer_id == customer_id).all()
+    return (
+        db.query(Order)
+        .filter(Order.customer_id == customer_id)
+        .order_by(Order.created_at.desc(), Order.id.desc())
+        .all()
+    )
 
 
 @router.get("/{order_id}", response_model=OrderOut)
