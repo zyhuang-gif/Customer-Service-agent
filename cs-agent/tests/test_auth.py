@@ -47,6 +47,7 @@ def test_customer_access_token_contains_customer_claims_and_expires_in_seven_day
     assert settings.customer_resume_hours == 2
     assert settings.customer_auth_rate_limit_attempts == 5
     assert settings.customer_auth_rate_limit_window_minutes == 15
+    assert settings.customer_auth_rate_limit_max_keys == 10000
 
 
 def test_decode_expired_customer_token_returns_none():

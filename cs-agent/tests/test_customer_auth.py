@@ -191,7 +191,9 @@ def test_success_clears_failed_attempts(client, monkeypatch):
 
 def test_fixed_window_limiter_supports_injected_time_and_reset():
     now = [100.0]
-    limiter = FixedWindowRateLimiter(limit=2, window_seconds=60, clock=lambda: now[0])
+    limiter = FixedWindowRateLimiter(
+        limit=2, window_seconds=60, max_keys=10, clock=lambda: now[0]
+    )
 
     assert limiter.retry_after("key") == 0
     limiter.record_failure("key")
@@ -203,6 +205,36 @@ def test_fixed_window_limiter_supports_injected_time_and_reset():
     limiter.record_failure("key")
     limiter.reset()
     assert limiter.retry_after("key") == 0
+
+
+def test_fixed_window_limiter_evicts_oldest_entries_at_capacity():
+    now = [100.0]
+    limiter = FixedWindowRateLimiter(
+        limit=2, window_seconds=60, max_keys=3, clock=lambda: now[0]
+    )
+
+    for key in ["a", "b", "c", "d", "e"]:
+        limiter.record_failure(key)
+        now[0] += 1
+
+    assert len(limiter._attempts) <= 3
+    assert set(limiter._attempts) == {"c", "d", "e"}
+
+
+def test_fixed_window_limiter_globally_cleans_expired_entries_on_check_and_record():
+    now = [100.0]
+    limiter = FixedWindowRateLimiter(
+        limit=2, window_seconds=60, max_keys=10, clock=lambda: now[0]
+    )
+    limiter.record_failure("old-a")
+    limiter.record_failure("old-b")
+
+    now[0] = 161.0
+    assert limiter.retry_after("new-check") == 0
+    assert limiter._attempts == {}
+
+    limiter.record_failure("new-record")
+    assert set(limiter._attempts) == {"new-record"}
 
 
 def test_customer_token_cannot_access_agent_endpoint(client):

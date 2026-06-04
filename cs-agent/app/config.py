@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     customer_resume_hours: int = 2
     customer_auth_rate_limit_attempts: int = 5
     customer_auth_rate_limit_window_minutes: int = 15
+    customer_auth_rate_limit_max_keys: int = 10000
 
     def key_for_embedding(self) -> str:
         return self.embedding_api_key or self.dashscope_api_key
