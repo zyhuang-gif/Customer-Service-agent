@@ -3,7 +3,34 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.conversation_activity import add_message
-from app.models import Conversation, Message
+from app.models import Conversation, Message, now
+
+
+def test_model_now_returns_utc_naive():
+    timestamp = now()
+
+    assert timestamp.tzinfo is None
+
+
+def test_new_conversation_defaults_are_naive_and_add_message_updates_activity(db_session):
+    db_session.add(Conversation(id="conv-1", customer_ref="C1"))
+    db_session.commit()
+    db_session.expire_all()
+
+    conversation = db_session.get(Conversation, "conv-1")
+    original_activity = conversation.last_message_at
+    assert conversation.created_at.tzinfo is None
+    assert original_activity.tzinfo is None
+
+    conversation.last_message_at = datetime(2020, 1, 1)
+    db_session.commit()
+    add_message(db_session, "conv-1", "customer", "你好")
+    db_session.commit()
+    db_session.expire_all()
+
+    reloaded_conversation = db_session.get(Conversation, "conv-1")
+    assert reloaded_conversation.last_message_at > datetime(2020, 1, 1)
+    assert reloaded_conversation.last_message_at.tzinfo is None
 
 
 def test_add_message_creates_message_and_updates_last_message_at(db_session):
