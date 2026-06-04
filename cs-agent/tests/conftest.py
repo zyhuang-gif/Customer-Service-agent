@@ -41,13 +41,17 @@ def client(db_session, monkeypatch):
 
     app.dependency_overrides[get_db] = override_get_db
 
+    service_calls = []
+
     class MockService:
         def __init__(self, db):
             self.db = db
 
         def start_turn(self, conversation_id, user_text):
-            from app.models import Message
-            self.db.add(Message(conversation_id=conversation_id, role="ai", content="您好，已收到。"))
+            from app.conversation_activity import add_message
+
+            service_calls.append((conversation_id, user_text))
+            add_message(self.db, conversation_id, "ai", "您好，已收到。")
             self.db.commit()
             return {"status": "ai_handling", "message": "您好，已收到。"}
 
@@ -61,5 +65,6 @@ def client(db_session, monkeypatch):
 
     from fastapi.testclient import TestClient
     with TestClient(app) as c:
+        c.service_calls = service_calls
         yield c
     app.dependency_overrides.clear()
