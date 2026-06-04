@@ -143,7 +143,16 @@ def test_anonymous_personal_request_requires_identity_without_calling_agent(clie
     assert client.service_calls == []
 
 
-@pytest.mark.parametrize("message", ["退货规则是什么", "退款多久到账", "满100元可以退货吗"])
+@pytest.mark.parametrize(
+    "message",
+    [
+        "退货规则是什么",
+        "退款多久到账",
+        "满100元可以退货吗",
+        "型号 ABC-123 支持七天无理由吗",
+        "20260604购买的商品能退货吗",
+    ],
+)
 def test_anonymous_policy_question_can_chat(client, message):
     response = client.post(
         "/chat",
@@ -190,11 +199,24 @@ def test_logged_in_customer_order_ownership_is_case_insensitive(client, monkeypa
     assert len(client.service_calls) == 1
 
 
+def test_logged_in_customer_is_denied_for_contextual_foreign_order(client, monkeypatch):
+    _customer_orders(monkeypatch, [{"id": "OWNED-ORDER"}])
+
+    response = client.post(
+        "/chat",
+        headers=_customer_headers(),
+        json={"customer_ref": "forged", "message": "查询订单 FOREIGN-ORDER"},
+    )
+
+    assert [event["type"] for event in _events(response)] == ["access_denied", "done"]
+    assert client.service_calls == []
+
+
 @pytest.mark.parametrize(
     "message",
     [
         "查一下订单20260531002的物流",
-        "对比订单20260531001和O-FOREIGN-9的退款状态",
+        "对比订单20260531001和订单O-FOREIGN-9的退款状态",
     ],
 )
 def test_logged_in_customer_is_denied_when_any_order_is_foreign(
@@ -249,14 +271,19 @@ def test_order_ownership_service_unavailable_is_safe_and_does_not_call_agent(
 @pytest.mark.parametrize(
     ("message", "expected_ids", "personal"),
     [
-        ("订单20260531001和O-ABC123的物流进度", {"20260531001", "O-ABC123"}, True),
+        ("订单20260531001和订单O-ABC123的物流进度", {"20260531001", "O-ABC123"}, True),
         ("查询订单号ABC123", {"ABC123"}, True),
-        ("帮我看看87654321", {"87654321"}, True),
-        ("帮我看看ABC-123", {"ABC-123"}, True),
+        ("查询订单 FOREIGN-ORDER", {"FOREIGN-ORDER"}, True),
+        ("订单编号：LETTERS", {"LETTERS"}, True),
+        ("单号: 87654321", {"87654321"}, True),
         ("查订单o-abc123", {"O-ABC123"}, True),
         ("退货规则是什么", set(), False),
         ("退款多久到账", set(), False),
         ("这件商品299元", set(), False),
+        ("帮我看看87654321", set(), False),
+        ("帮我看看ABC-123", set(), False),
+        ("20260604购买的商品能退货吗", set(), False),
+        ("型号 ABC-123 支持七天无理由吗", set(), False),
         ("型号 iPhone15 支持七天无理由吗", set(), False),
         ("手机号是13800000001", set(), False),
         ("今天是2026年6月4日", set(), False),
