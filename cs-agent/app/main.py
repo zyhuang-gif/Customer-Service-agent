@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.agent.deps import warmup
 from app.db import Base, get_engine
+from app.schema_migrations import ensure_conversation_last_message_at
 from app.routers import (
     auth_router,
     agent_desk_router,
@@ -19,7 +20,9 @@ from app.routers import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
-        Base.metadata.create_all(bind=get_engine())
+        engine = get_engine()
+        Base.metadata.create_all(bind=engine)
+        ensure_conversation_last_message_at(engine)
     except Exception:
         pass
     # 预热：提前灌知识库 + 构造图/checkpointer，避免首个 /chat 请求超时。

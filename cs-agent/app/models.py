@@ -31,6 +31,7 @@ class Conversation(Base):
     assigned_agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     summary: Mapped[str] = mapped_column(String, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    last_message_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
