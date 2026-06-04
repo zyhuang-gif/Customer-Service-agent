@@ -26,7 +26,12 @@ def current_user(cred: HTTPAuthorizationCredentials | None = Depends(_bearer), d
     payload = decode_token(cred.credentials)
     if not payload:
         raise HTTPException(status_code=401, detail="登录已失效")
-    user = db.get(User, payload["uid"])
+    uid = payload.get("uid")
+    if payload.get("role") not in {"agent", "admin"} or uid is None:
+        raise HTTPException(status_code=401, detail="无坐席访问权限")
+    user = db.get(User, uid)
     if not user:
         raise HTTPException(status_code=401, detail="用户不存在")
+    if user.role not in {"agent", "admin"}:
+        raise HTTPException(status_code=401, detail="无坐席访问权限")
     return user

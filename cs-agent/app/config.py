@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     # 轻量登录 JWT
     jwt_secret: str = "dev-secret-change-me"
     jwt_expire_minutes: int = 720
+    customer_jwt_expire_days: int = 7
+    customer_resume_hours: int = 2
 
     def key_for_embedding(self) -> str:
         return self.embedding_api_key or self.dashscope_api_key

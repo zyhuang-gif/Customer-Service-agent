@@ -27,6 +27,19 @@ def create_access_token(subject: str, role: str, user_id: int) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm=_ALGO)
 
 
+def create_customer_access_token(customer_ref: str) -> tuple[str, datetime]:
+    expire = (datetime.now(timezone.utc) + timedelta(days=settings.customer_jwt_expire_days)).replace(
+        microsecond=0
+    )
+    payload = {
+        "sub": customer_ref,
+        "role": "customer",
+        "customer_ref": customer_ref,
+        "exp": expire,
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=_ALGO), expire
+
+
 def decode_token(token: str) -> dict[str, Any] | None:
     try:
         return jwt.decode(token, settings.jwt_secret, algorithms=[_ALGO])
