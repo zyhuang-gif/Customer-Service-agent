@@ -2,12 +2,17 @@ import json
 
 import pytest
 from jose import jwt
+from langchain_core.messages import AIMessage
+from langgraph.checkpoint.memory import MemorySaver
 
+from app.agent.graph import build_graph
+from app.agent.service import ConversationService
 from app.auth import create_access_token, create_customer_access_token, hash_password
 from app.clients.business_client import BusinessClient
 from app.config import settings
 from app.errors import BusinessUnavailable
-from app.models import Conversation, User
+from app.models import Conversation, PendingAction, User
+from app.tools.registry import ToolRegistry
 
 
 def _events(response):
@@ -29,6 +34,19 @@ def _customer_orders(monkeypatch, orders, *, customer_ref="C1001"):
         BusinessClient,
         "get_customer_by_phone",
         lambda self, phone: customer if phone == customer_ref else None,
+    )
+    monkeypatch.setattr(
+        BusinessClient,
+        "get_customer",
+        lambda self, customer_id: customer if customer_id == customer_ref else None,
+    )
+    order_by_id = {str(order["id"]).upper(): order for order in orders}
+    for order in orders:
+        order.setdefault("customer_id", customer_ref)
+    monkeypatch.setattr(
+        BusinessClient,
+        "get_order",
+        lambda self, order_id: order_by_id.get(str(order_id).upper()),
     )
     monkeypatch.setattr(
         BusinessClient,
@@ -95,6 +113,20 @@ def test_customer_cannot_continue_foreign_conversation(client, db_session):
     assert client.service_calls == []
 
 
+def test_anonymous_cannot_continue_existing_conversation(client, db_session):
+    db_session.add(Conversation(id="existing", customer_ref="anonymous"))
+    db_session.commit()
+
+    response = client.post(
+        "/chat",
+        json={"conversation_id": "existing", "customer_ref": "anonymous", "message": "继续"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "会话不存在"
+    assert client.service_calls == []
+
+
 @pytest.mark.parametrize(
     "headers",
     [
@@ -129,7 +161,19 @@ def test_chat_rejects_invalid_non_customer_or_expired_bearer(client, headers):
 
 @pytest.mark.parametrize(
     "message",
-    ["我的订单到哪了", "查订单", "查询订单", "查物流", "物流进度", "退款进度", "退款状态"],
+    [
+        "我的订单到哪了",
+        "查订单",
+        "查询订单",
+        "查物流",
+        "物流进度",
+        "退款进度",
+        "退款状态",
+        "查一下 O-FOREIGN-9 的物流",
+        "我要退款 ABC123 100元",
+        "改地址",
+        "发券",
+    ],
 )
 def test_anonymous_personal_request_requires_identity_without_calling_agent(client, message):
     response = client.post(
@@ -270,6 +314,207 @@ def test_order_ownership_service_unavailable_is_safe_and_does_not_call_agent(
 
 
 @pytest.mark.parametrize(
+    "customer,order",
+    [
+        ({}, {"id": "O1", "customer_id": "C1001"}),
+        ({"id": "C2002"}, {"id": "O1", "customer_id": "C2002"}),
+        ({"id": "C1001"}, []),
+        ({"id": "C1001"}, {"customer_id": "C1001"}),
+        ({"id": "C1001"}, {"id": "O1"}),
+    ],
+)
+def test_malformed_customer_or_order_response_is_safe(
+    client, monkeypatch, customer, order
+):
+    monkeypatch.setattr(BusinessClient, "get_customer", lambda self, customer_id: customer)
+    monkeypatch.setattr(BusinessClient, "get_customer_by_phone", lambda self, phone: customer)
+    monkeypatch.setattr(BusinessClient, "get_order", lambda self, order_id: order)
+
+    response = client.post(
+        "/chat",
+        headers=_customer_headers(),
+        json={"customer_ref": "forged", "message": "查订单 O1"},
+    )
+
+    assert [event["type"] for event in _events(response)] == ["service_unavailable", "done"]
+    assert client.service_calls == []
+
+
+def test_explicit_order_validation_uses_get_order_not_full_order_list(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        BusinessClient,
+        "get_customer",
+        lambda self, customer_id: {"id": "C1001"},
+    )
+    monkeypatch.setattr(
+        BusinessClient,
+        "get_customer_by_phone",
+        lambda self, phone: {"id": "C1001"},
+    )
+    monkeypatch.setattr(
+        BusinessClient,
+        "get_order",
+        lambda self, order_id: calls.append(("get_order", order_id))
+        or {"id": order_id, "customer_id": "C1001"},
+    )
+    monkeypatch.setattr(
+        BusinessClient,
+        "list_orders",
+        lambda self, customer_id: (_ for _ in ()).throw(
+            AssertionError("explicit order validation must not list all orders")
+        ),
+    )
+
+    response = client.post(
+        "/chat",
+        headers=_customer_headers(),
+        json={"customer_ref": "forged", "message": "查订单 O1 和 O2"},
+    )
+
+    assert [event["type"] for event in _events(response)] == ["start", "response", "done"]
+    assert sorted(calls) == [("get_order", "O1"), ("get_order", "O2")]
+
+
+class _ToolCallingLLM:
+    def __init__(self, tool_name, params):
+        self.tool_name = tool_name
+        self.params = params
+        self.calls = 0
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages):
+        self.calls += 1
+        if self.calls == 1:
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": self.tool_name,
+                        "args": self.params,
+                        "id": "tool-1",
+                        "type": "tool_call",
+                    }
+                ],
+            )
+        return AIMessage(content="无法访问该信息。")
+
+
+class _BoundaryBusiness:
+    def __init__(self):
+        self.personal_calls = []
+
+    def get_order(self, order_id):
+        return {"id": order_id, "customer_id": "C2002"}
+
+    def get_logistics(self, order_id):
+        self.personal_calls.append(("get_logistics", order_id))
+        return {"order_id": order_id, "status": "运输中"}
+
+    def apply_refund(self, order_id, amount, reason=""):
+        self.personal_calls.append(("apply_refund", order_id))
+        return {"id": "RF1"}
+
+
+class _EmptyRetriever:
+    def retrieve(self, query):
+        return []
+
+
+@pytest.mark.parametrize(
+    ("identity_verified", "customer_ref", "tool_name", "params"),
+    [
+        (False, None, "get_order", {"order_id": "O-OWNED"}),
+        (
+            False,
+            None,
+            "apply_refund",
+            {"order_id": "O-OWNED", "amount": 100.0, "reason": "test"},
+        ),
+        (True, "C1001", "get_logistics", {"order_id": "O-FOREIGN"}),
+    ],
+)
+def test_real_service_tool_boundary_denies_unscoped_personal_calls(
+    db_session, identity_verified, customer_ref, tool_name, params
+):
+    business = _BoundaryBusiness()
+    registry = ToolRegistry(business=business, retriever=_EmptyRetriever())
+    graph = build_graph(
+        llm=_ToolCallingLLM(tool_name, params),
+        registry=registry,
+        checkpointer=MemorySaver(),
+    )
+    db_session.add(
+        Conversation(id=f"boundary-{tool_name}", customer_ref=customer_ref or "anonymous")
+    )
+    db_session.commit()
+    service = ConversationService(
+        db=db_session,
+        graph=graph,
+        business=business,
+        registry=registry,
+    )
+
+    out = service.start_turn(
+        f"boundary-{tool_name}",
+        "请处理",
+        verified_customer_id=customer_ref if identity_verified else None,
+    )
+
+    assert out["status"] == "ai_handling"
+    assert business.personal_calls == []
+    assert (
+        db_session.query(PendingAction)
+        .filter_by(conversation_id=f"boundary-{tool_name}")
+        .count()
+        == 0
+    )
+
+
+def test_resume_action_rechecks_customer_scope_before_business_write(db_session):
+    business = _BoundaryBusiness()
+    registry = ToolRegistry(business=business, retriever=_EmptyRetriever())
+    db_session.add(Conversation(id="resume-boundary", customer_ref="C1001"))
+    db_session.add(
+        PendingAction(
+            conversation_id="resume-boundary",
+            customer_ref="C1001",
+            tool_name="apply_refund",
+            params={"order_id": "O-FOREIGN", "amount": 100.0},
+            status="pending",
+        )
+    )
+    db_session.commit()
+    pending = db_session.query(PendingAction).filter_by(conversation_id="resume-boundary").one()
+    service = ConversationService(
+        db=db_session,
+        graph=None,
+        business=business,
+        registry=registry,
+    )
+
+    out = service.resume_action(pending.id, approved=True, reviewer_id=1)
+
+    assert out["pending_status"] == "failed"
+    assert business.personal_calls == []
+
+
+def test_tool_authorization_converts_unexpected_order_check_error():
+    class BrokenBusiness:
+        def get_order(self, order_id):
+            raise ValueError("malformed upstream payload")
+
+    registry = ToolRegistry(business=BrokenBusiness(), retriever=_EmptyRetriever())
+
+    out = registry.call("get_order", {"order_id": "O1"}, customer_ref="C1001")
+
+    assert out["error"] is True
+    assert out["kind"] == "internal"
+
+
+@pytest.mark.parametrize(
     ("message", "expected_ids", "personal"),
     [
         ("订单20260531001和O-ABC123的物流进度", {"20260531001", "O-ABC123"}, True),
@@ -279,6 +524,10 @@ def test_order_ownership_service_unavailable_is_safe_and_does_not_call_agent(
         ("订单#ABC123", {"ABC123"}, True),
         ("查询订单号ABC123", {"ABC123"}, True),
         ("查询订单 FOREIGN-ORDER", {"FOREIGN-ORDER"}, True),
+        ("查一下 O-FOREIGN-9 的物流", {"O-FOREIGN-9"}, True),
+        ("我要退款 ABC123 100元", {"ABC123"}, True),
+        ("改地址", set(), True),
+        ("发券", set(), True),
         ("订单编号：LETTERS", {"LETTERS"}, True),
         ("单号: 87654321", {"87654321"}, True),
         ("查订单o-abc123", {"O-ABC123"}, True),

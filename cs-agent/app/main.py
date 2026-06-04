@@ -5,7 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.agent.deps import warmup
 from app.db import Base, get_engine
-from app.schema_migrations import ensure_conversation_last_message_at
+from app.schema_migrations import (
+    ensure_conversation_last_message_at,
+    ensure_pending_action_customer_ref,
+)
 from app.routers import (
     auth_router,
     agent_desk_router,
@@ -28,6 +31,7 @@ async def lifespan(app: FastAPI):
         pass
     else:
         ensure_conversation_last_message_at(engine)
+        ensure_pending_action_customer_ref(engine)
     # 预热：提前灌知识库 + 构造图/checkpointer，避免首个 /chat 请求超时。
     # 失败不阻断启动（如测试环境无 Postgres/无 key）。测试会 monkeypatch warmup。
     try:

@@ -65,6 +65,7 @@ class PendingAction(Base):
     __tablename__ = "pending_actions"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"), index=True)
+    customer_ref: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     tool_name: Mapped[str] = mapped_column(String)
     params: Mapped[dict] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String, default="pending")

@@ -47,7 +47,7 @@ def client(db_session, monkeypatch):
         def __init__(self, db):
             self.db = db
 
-        def start_turn(self, conversation_id, user_text):
+        def start_turn(self, conversation_id, user_text, *, verified_customer_id=None):
             from app.conversation_activity import add_message
 
             service_calls.append((conversation_id, user_text))

@@ -8,7 +8,10 @@ from sqlalchemy.exc import IntegrityError
 
 import app.main as main_module
 import app.schema_migrations as schema_migrations
-from app.schema_migrations import ensure_conversation_last_message_at
+from app.schema_migrations import (
+    ensure_conversation_last_message_at,
+    ensure_pending_action_customer_ref,
+)
 
 
 def _create_legacy_schema(engine):
@@ -107,6 +110,37 @@ def test_conversation_last_message_at_migration_is_idempotent():
         for index in inspector.get_indexes("conversations")
         if index["name"] == "ix_conversations_last_message_at"
     ] == ["ix_conversations_last_message_at"]
+
+
+def test_pending_action_customer_ref_migration_is_idempotent():
+    engine = create_engine("sqlite://")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE pending_actions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id VARCHAR NOT NULL,
+                    tool_name VARCHAR NOT NULL
+                )
+                """
+            )
+        )
+
+    ensure_pending_action_customer_ref(engine)
+    ensure_pending_action_customer_ref(engine)
+
+    inspector = inspect(engine)
+    assert [
+        column["name"]
+        for column in inspector.get_columns("pending_actions")
+        if column["name"] == "customer_ref"
+    ] == ["customer_ref"]
+    assert [
+        index["name"]
+        for index in inspector.get_indexes("pending_actions")
+        if index["name"] == "ix_pending_actions_customer_ref"
+    ] == ["ix_pending_actions_customer_ref"]
 
 
 def test_migration_adds_customer_conversation_query_indexes_idempotently():

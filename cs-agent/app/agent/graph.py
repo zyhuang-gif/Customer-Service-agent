@@ -53,7 +53,14 @@ def build_graph(llm, registry, checkpointer, tool_specs=None):
         last = state["messages"][-1]
         out_msgs = []
         for tc in last.tool_calls:
-            result = registry.call(tc["name"], tc["args"])
+            if hasattr(registry, "authorize_customer_call"):
+                result = registry.call(
+                    tc["name"],
+                    tc["args"],
+                    customer_ref=state.get("customer_ref"),
+                )
+            else:
+                result = registry.call(tc["name"], tc["args"])
             out_msgs.append(ToolMessage(content=str(result), tool_call_id=tc["id"], name=tc["name"]))
         return {"messages": out_msgs}
 
@@ -61,6 +68,25 @@ def build_graph(llm, registry, checkpointer, tool_specs=None):
         last = state["messages"][-1]
         for tc in last.tool_calls:
             if is_high_risk(tc["name"]):
+                denied = (
+                    registry.authorize_customer_call(
+                        tc["name"],
+                        tc["args"],
+                        customer_ref=state.get("customer_ref"),
+                    )
+                    if hasattr(registry, "authorize_customer_call")
+                    else None
+                )
+                if denied:
+                    return {
+                        "messages": [
+                            ToolMessage(
+                                content=str(denied),
+                                tool_call_id=tc["id"],
+                                name=tc["name"],
+                            )
+                        ]
+                    }
                 decision = interrupt({
                     "type": "high_risk_confirmation",
                     "tool_name": tc["name"],

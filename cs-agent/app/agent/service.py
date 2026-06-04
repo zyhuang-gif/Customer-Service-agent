@@ -22,10 +22,11 @@ _EXECUTORS = {
 
 
 class ConversationService:
-    def __init__(self, db: Session, graph, business):
+    def __init__(self, db: Session, graph, business, registry=None):
         self.db = db
         self.graph = graph
         self.business = business
+        self.registry = registry
 
     def _config(self, conversation_id: str) -> dict:
         return {"configurable": {"thread_id": conversation_id}}
@@ -55,10 +56,16 @@ class ConversationService:
             return f"坐席已确认执行发券申请，{suffix}"
         return "坐席已确认执行该操作，业务系统已处理完成。"
 
-    def _pending_high_risk(self, conversation_id: str, tool_name: str, params: dict[str, Any]) -> dict[str, Any]:
+    def _pending_high_risk(
+        self,
+        conversation_id: str,
+        tool_name: str,
+        params: dict[str, Any],
+        customer_ref: str | None = None,
+    ) -> dict[str, Any]:
         pa = PendingAction(
             conversation_id=conversation_id, tool_name=tool_name,
-            params=params, status="pending", proposed_by="ai",
+            params=params, status="pending", proposed_by="ai", customer_ref=customer_ref,
         )
         self.db.add(pa)
         conv = self.db.get(Conversation, conversation_id)
@@ -241,7 +248,13 @@ class ConversationService:
                 )
         return None
 
-    def start_turn(self, conversation_id: str, user_text: str) -> dict[str, Any]:
+    def start_turn(
+        self,
+        conversation_id: str,
+        user_text: str,
+        *,
+        verified_customer_id: str | None = None,
+    ) -> dict[str, Any]:
         sentiment_meta = analyze_sentiment(user_text)
         decision = route_customer_message(user_text)
         add_message(
@@ -263,7 +276,22 @@ class ConversationService:
         high_risk_request = self._explicit_high_risk_request(user_text)
         if high_risk_request:
             tool_name, params = high_risk_request
-            out = self._pending_high_risk(conversation_id, tool_name, params)
+            if self.registry:
+                denied = self.registry.authorize_customer_call(
+                    tool_name,
+                    params,
+                    customer_ref=verified_customer_id,
+                )
+                if denied:
+                    return {
+                        "status": "access_denied",
+                        "message": denied["message"],
+                        "agent_trace": [self._coordinator_trace(decision)],
+                        "citations": [],
+                    }
+            out = self._pending_high_risk(
+                conversation_id, tool_name, params, customer_ref=verified_customer_id
+            )
             out["agent_trace"] = [
                 self._coordinator_trace(decision),
                 {
@@ -279,13 +307,19 @@ class ConversationService:
             return out
 
         state = {"messages": [{"role": "user", "content": user_text}],
-                 "conversation_id": conversation_id, "customer_ref": "", "intent": decision["task_type"],
+                 "conversation_id": conversation_id, "customer_ref": verified_customer_id,
+                 "intent": decision["task_type"],
                  "coordinator_decision": decision}
         result = self.graph.invoke(state, config=self._config(conversation_id))
 
         if "__interrupt__" in result:
             intr = result["__interrupt__"][0].value
-            out = self._pending_high_risk(conversation_id, intr["tool_name"], intr["params"])
+            out = self._pending_high_risk(
+                conversation_id,
+                intr["tool_name"],
+                intr["params"],
+                customer_ref=verified_customer_id,
+            )
             out["agent_trace"] = [self._coordinator_trace(decision)]
             out["citations"] = []
             return out
@@ -341,16 +375,30 @@ class ConversationService:
             self.db.commit()
             return {"status": conv.status, "pending_status": pa.status, "message": ai_text}
         else:
-            executor = _EXECUTORS[pa.tool_name]
-            try:
-                result = executor(self.business, pa.params)
-                pa.status = "executed"
-                pa.result = result or {}
-                status = "executed"
-            except Exception as exc:  # noqa: BLE001
+            denied = (
+                self.registry.authorize_customer_call(
+                    pa.tool_name,
+                    pa.params,
+                    customer_ref=pa.customer_ref,
+                )
+                if self.registry
+                else None
+            )
+            if denied:
                 pa.status = "failed"
-                pa.result = {"error": str(exc)}
+                pa.result = denied
                 status = "failed"
+            else:
+                executor = _EXECUTORS[pa.tool_name]
+                try:
+                    result = executor(self.business, pa.params)
+                    pa.status = "executed"
+                    pa.result = result or {}
+                    status = "executed"
+                except Exception as exc:  # noqa: BLE001
+                    pa.status = "failed"
+                    pa.result = {"error": str(exc)}
+                    status = "failed"
             self.db.commit()
             audit(self.db, actor=str(reviewer_id), action_type="confirm", conversation_id=pa.conversation_id,
                   tool_name=pa.tool_name, params=pa.params, result=pa.result, risk_level="high_write", status=status)

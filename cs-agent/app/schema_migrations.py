@@ -114,6 +114,36 @@ def ensure_conversation_last_message_at(engine: Engine) -> None:
         )
 
 
+def ensure_pending_action_customer_ref(engine: Engine) -> None:
+    is_postgres = engine.dialect.name == "postgresql"
+    with _migration_transaction(engine, is_postgres) as connection:
+        inspector = inspect(connection)
+        if not inspector.has_table("pending_actions"):
+            return
+        column_names = {
+            column["name"] for column in inspector.get_columns("pending_actions")
+        }
+        if "customer_ref" not in column_names:
+            if is_postgres:
+                connection.execute(
+                    text(
+                        "ALTER TABLE pending_actions ADD COLUMN IF NOT EXISTS "
+                        "customer_ref VARCHAR"
+                    )
+                )
+            else:
+                connection.execute(
+                    text("ALTER TABLE pending_actions ADD COLUMN customer_ref VARCHAR")
+                )
+        _create_index(
+            connection,
+            is_postgres=is_postgres,
+            table_name="pending_actions",
+            index_name="ix_pending_actions_customer_ref",
+            columns="customer_ref",
+        )
+
+
 @contextmanager
 def _migration_transaction(engine: Engine, is_postgres: bool):
     if is_postgres:

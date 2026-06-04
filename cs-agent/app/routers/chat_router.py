@@ -8,7 +8,11 @@ from sqlalchemy.orm import Session
 
 from app.agent.deps import build_service
 from app.auth import decode_token
-from app.customer_access import classify_customer_request, customer_owns_orders
+from app.customer_access import (
+    CustomerAccessValidationError,
+    classify_customer_request,
+    customer_owns_orders,
+)
 from app.db import get_db
 from app.errors import BusinessUnavailable
 from app.models import Conversation
@@ -52,7 +56,9 @@ def chat(
 ):
     conv_id = body.conversation_id or f"conv-{uuid.uuid4().hex[:12]}"
     conversation = db.get(Conversation, conv_id)
-    if customer_ref and conversation and conversation.customer_ref != customer_ref:
+    if body.conversation_id and (
+        not customer_ref or not conversation or conversation.customer_ref != customer_ref
+    ):
         raise HTTPException(status_code=404, detail="会话不存在")
 
     request_access = classify_customer_request(body.message)
@@ -65,7 +71,7 @@ def chat(
     if customer_ref and request_access.order_ids:
         try:
             owns_orders = customer_owns_orders(customer_ref, request_access.order_ids)
-        except BusinessUnavailable:
+        except (BusinessUnavailable, CustomerAccessValidationError):
             return _short_stream(
                 "service_unavailable",
                 "查询服务暂时不可用，请稍后再试。",
@@ -92,7 +98,11 @@ def chat(
     def gen():
         yield _sse({"type": "start", "conversation_id": conv_id})
         svc = build_service(db)
-        out = svc.start_turn(conv_id, body.message)
+        out = svc.start_turn(
+            conv_id,
+            body.message,
+            verified_customer_id=customer_ref,
+        )
         if out["status"] == "awaiting_confirmation":
             yield _sse({"type": "awaiting_confirmation", "pending_action_id": out["pending_action_id"],
                         "content": out["message"], "citations": out.get("citations", []),

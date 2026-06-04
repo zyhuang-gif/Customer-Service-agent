@@ -13,16 +13,69 @@ from app.errors import BusinessUnavailable, ToolError
 from app.tools.risk import TOOL_RISK, RiskLevel, risk_of
 from app.tools.schemas import PendingActionIntent
 
+_TRUSTED_INTERNAL = object()
+
 
 class ToolRegistry:
     def __init__(self, business, retriever):
         self.business = business
         self.retriever = retriever
 
-    def call(self, tool_name: str, params: dict[str, Any]) -> dict[str, Any] | list:
+    def authorize_customer_call(
+        self,
+        tool_name: str,
+        params: dict[str, Any],
+        *,
+        customer_ref: str | None,
+    ) -> dict[str, Any] | None:
+        if tool_name in {"search_knowledge", "transfer_to_human"}:
+            return None
+        if not customer_ref:
+            return ToolError("access_denied", "请先完成客户身份验证").to_dict()
+
+        customer_id = params.get("customer_id")
+        if customer_id is not None and str(customer_id) != customer_ref:
+            return ToolError("access_denied", "无法访问其他客户的信息").to_dict()
+
+        order_id = params.get("order_id")
+        if order_id:
+            try:
+                order = self.business.get_order(order_id)
+            except BusinessUnavailable:
+                return ToolError("upstream_unavailable", "业务系统暂时不可用").to_dict()
+            except Exception:
+                return ToolError("internal", "无法安全验证订单归属").to_dict()
+            if order is None:
+                return ToolError("access_denied", "无法验证订单归属").to_dict()
+            if not isinstance(order, dict) or not order.get("id") or not order.get("customer_id"):
+                return ToolError("internal", "无法安全验证订单归属").to_dict()
+            if str(order["id"]).upper() != str(order_id).upper():
+                return ToolError("internal", "无法安全验证订单归属").to_dict()
+            if str(order["customer_id"]) != customer_ref:
+                return ToolError("access_denied", "无法访问其他客户的订单").to_dict()
+
+        if tool_name == "update_ticket":
+            return ToolError("access_denied", "无法安全验证工单归属").to_dict()
+        return None
+
+    def call(
+        self,
+        tool_name: str,
+        params: dict[str, Any],
+        *,
+        customer_ref: str | None | object = _TRUSTED_INTERNAL,
+    ) -> dict[str, Any] | list:
         # 未知工具名（如 LLM 幻觉）→ 返回结构化错误，绝不向上抛异常
         if tool_name not in TOOL_RISK:
             return ToolError("bad_request", f"未知工具：{tool_name}", {"tool_name": tool_name}).to_dict()
+        if customer_ref is not _TRUSTED_INTERNAL:
+            denied = self.authorize_customer_call(
+                tool_name,
+                params,
+                customer_ref=customer_ref,
+            )
+            if denied:
+                return denied
         level = risk_of(tool_name)
         if level == RiskLevel.HIGH_WRITE:
             return PendingActionIntent(tool_name=tool_name, params=params).to_dict()
