@@ -1,15 +1,21 @@
 import { apiUrl } from './client'
 
-export async function chatStream({ conversationId, customerRef, message }, onEvent) {
+export async function chatStream({ conversationId, customerRef, message, token }, onEvent) {
+  const headers = { 'Content-Type': 'application/json' }
+  if (token) headers.Authorization = `Bearer ${token}`
   const resp = await fetch(apiUrl('/chat'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({
       conversation_id: conversationId || null,
       customer_ref: customerRef,
       message,
     }),
   })
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({}))
+    throw new Error(detail.detail || `请求失败 ${resp.status}`)
+  }
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()
   let buf = ''
