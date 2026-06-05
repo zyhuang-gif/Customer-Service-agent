@@ -1,15 +1,25 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { chatStream } from '../api/sse'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { api } from '../api/client'
+import { chatStream } from '../api/sse'
+import CustomerHistoryDrawer from '../components/CustomerHistoryDrawer.vue'
+import CustomerVerifyDialog from '../components/CustomerVerifyDialog.vue'
 import MessageBubble from '../components/MessageBubble.vue'
+import { useCustomerSessionStore } from '../stores/customerSession'
 
-const customerRef = ref(localStorage.getItem('chat_customer_ref') || '13800000001')
-const conversationId = ref(localStorage.getItem('chat_conversation_id') || '')
+const customerSession = useCustomerSessionStore()
+
+const conversationId = ref('')
 const input = ref('')
-const messages = ref(loadCachedMessages())
+const messages = ref([])
 const sending = ref(false)
-let syncTimer = 0
+const historyOpen = ref(false)
+const historyLoading = ref(false)
+const historyError = ref('')
+const conversations = ref([])
+const verifyOpen = ref(false)
+const verifyLoading = ref(false)
+const verifyError = ref('')
 let typeTimer = 0
 
 const quickIntents = [
@@ -20,86 +30,100 @@ const quickIntents = [
   { key: 'handoff', label: '转人工', text: '我要转人工客服' },
 ]
 
-const lastCustomerMessage = computed(() => {
-  return [...messages.value].reverse().find((m) => m.role === 'customer') || null
-})
-
 const latestServiceMessage = computed(() => {
   return [...messages.value].reverse().find((m) => ['ai', 'system', 'agent'].includes(m.role)) || null
 })
 
 const sessionStatus = computed(() => {
-  if (sending.value) return { label: 'AI处理中', tone: 'processing' }
+  if (sending.value) return { label: '处理中', tone: 'processing' }
   const content = latestServiceMessage.value?.content || ''
-  if (content.includes('人工确认') || content.includes('转人工')) {
-    return { label: '需要人工确认', tone: 'attention' }
-  }
-  if (messages.value.length) return { label: '服务中', tone: 'active' }
-  return { label: '服务中', tone: 'idle' }
+  if (content.includes('人工确认') || content.includes('转人工')) return { label: '待人工', tone: 'attention' }
+  if (messages.value.length) return { label: '咨询中', tone: 'active' }
+  return { label: '新咨询', tone: 'idle' }
 })
 
-const activeIntent = computed(() => {
-  const text = lastCustomerMessage.value?.content || ''
-  if (/退款|退钱|到账/.test(text)) return '退款咨询'
-  if (/物流|快递|运输|配送/.test(text)) return '物流查询'
-  if (/订单|单号/.test(text)) return '订单查询'
-  if (/退货|换货/.test(text)) return '退换货咨询'
-  if (/投诉|人工|客服/.test(text)) return '人工协助'
-  return messages.value.length ? '综合咨询' : '等待用户描述问题'
-})
-
-const orderNo = computed(() => {
-  const text = lastCustomerMessage.value?.content || ''
-  return text.match(/\b\d{8,}\b/)?.[0] || '待识别'
-})
-
-const latestTrace = computed(() => {
-  return latestServiceMessage.value?.agent_trace || []
-})
-
-const contextItems = computed(() => [
-  { label: '当前意图', value: activeIntent.value },
-  { label: '订单编号', value: orderNo.value },
-  { label: '处理状态', value: sessionStatus.value.label },
-  { label: '知识依据', value: `${latestServiceMessage.value?.citations?.length || 0} 条` },
-])
-
-function loadCachedMessages() {
-  try {
-    const cached = JSON.parse(localStorage.getItem('chat_messages') || '[]')
-    return Array.isArray(cached) ? cached : []
-  } catch {
-    return []
-  }
+function clearLegacyCache() {
+  localStorage.removeItem('chat_customer_ref')
+  localStorage.removeItem('chat_conversation_id')
+  localStorage.removeItem('chat_messages')
 }
 
-function persistChat() {
-  localStorage.setItem('chat_customer_ref', customerRef.value)
-  localStorage.setItem('chat_conversation_id', conversationId.value)
-  localStorage.setItem('chat_messages', JSON.stringify(messages.value))
-}
-
-async function loadServerMessages() {
-  const token = localStorage.getItem('cs_token')
-  if (!conversationId.value || !token || sending.value || typeTimer) return
-  try {
-    const rows = await api(`/conversations/${conversationId.value}/messages`, { token })
-    messages.value = rows.map((m) => ({
-      role: m.role,
-      content: m.content,
-      citations: (m.meta && m.meta.citations) || [],
-      agent_trace: (m.meta && m.meta.agent_trace) || [],
-    }))
-    persistChat()
-  } catch {
-    // 客户页以本地缓存为主；后端拉取失败时保留当前可见历史。
-  }
+function normalizeRows(rows) {
+  return rows.map((message) => ({
+    role: message.role,
+    content: message.content,
+    citations: message.meta?.citations || [],
+    agent_trace: message.meta?.agent_trace || [],
+  }))
 }
 
 function clearTypeTimer() {
   if (!typeTimer) return
   window.clearInterval(typeTimer)
   typeTimer = 0
+}
+
+function startNewConsultation() {
+  clearTypeTimer()
+  conversationId.value = ''
+  messages.value = []
+  input.value = ''
+}
+
+async function openConversation(id) {
+  if (!customerSession.isLoggedIn) {
+    verifyOpen.value = true
+    return
+  }
+  const rows = await api(`/customer/conversations/${id}/messages`, { token: customerSession.token })
+  conversationId.value = id
+  messages.value = normalizeRows(rows)
+  historyOpen.value = false
+}
+
+async function initializeRecentConversation() {
+  startNewConsultation()
+  if (!customerSession.isLoggedIn) return
+  try {
+    const recent = await api('/customer/conversations/recent', { token: customerSession.token })
+    if (recent.should_resume && recent.conversation?.id) {
+      await openConversation(recent.conversation.id)
+    }
+  } catch (error) {
+    customerSession.logout()
+  }
+}
+
+async function loadHistory() {
+  if (!customerSession.isLoggedIn) {
+    verifyOpen.value = true
+    return
+  }
+  historyOpen.value = true
+  historyLoading.value = true
+  historyError.value = ''
+  try {
+    conversations.value = await api('/customer/conversations', { token: customerSession.token })
+  } catch (error) {
+    historyError.value = error.message || '历史咨询加载失败'
+    if (historyError.value.includes('登录')) customerSession.logout()
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+async function verifyCustomer(phone, recentOrderId) {
+  verifyLoading.value = true
+  verifyError.value = ''
+  try {
+    await customerSession.verify(phone, recentOrderId)
+    verifyOpen.value = false
+    await initializeRecentConversation()
+  } catch (error) {
+    verifyError.value = error.message || '验证失败'
+  } finally {
+    verifyLoading.value = false
+  }
 }
 
 function playResponse(index, fullText, meta = {}) {
@@ -111,15 +135,23 @@ function playResponse(index, fullText, meta = {}) {
     agent_trace: meta.agent_trace || [],
   }
   messages.value[index] = { role: 'ai', content: text.slice(0, cursor), ...extra }
-  persistChat()
   if (cursor >= text.length) return
 
   typeTimer = window.setInterval(() => {
     cursor = Math.min(cursor + 2, text.length)
     messages.value[index] = { role: 'ai', content: text.slice(0, cursor), ...extra }
-    persistChat()
     if (cursor >= text.length) clearTypeTimer()
   }, 30)
+}
+
+function replacePending(index, role, content, meta = {}) {
+  clearTypeTimer()
+  messages.value[index] = {
+    role,
+    content,
+    citations: meta.citations || [],
+    agent_trace: meta.agent_trace || [],
+  }
 }
 
 async function send() {
@@ -128,38 +160,39 @@ async function send() {
   messages.value.push({ role: 'customer', content: text })
   const pendingIndex = messages.value.length
   messages.value.push({ role: 'system', content: '正在处理，请稍候...' })
-  persistChat()
   input.value = ''
   sending.value = true
-  let aiIndex = pendingIndex
   try {
     await chatStream(
-      { conversationId: conversationId.value, customerRef: customerRef.value, message: text },
-      (ev) => {
-        if (ev.type === 'start') {
-          conversationId.value = ev.conversation_id
-          persistChat()
-        } else if (ev.type === 'response') {
-          playResponse(aiIndex, ev.content, {
-            citations: ev.citations || [],
-            agent_trace: ev.agent_trace || [],
-          })
-        } else if (ev.type === 'awaiting_confirmation') {
-          clearTypeTimer()
-          messages.value[pendingIndex] = {
-            role: 'system',
-            content: ev.content || '该操作已提交人工确认，请稍候。',
-            citations: ev.citations || [],
-            agent_trace: ev.agent_trace || [],
-          }
-          persistChat()
+      {
+        conversationId: conversationId.value,
+        customerRef: 'anonymous-web',
+        message: text,
+        token: customerSession.isLoggedIn ? customerSession.token : '',
+      },
+      (event) => {
+        if (event.type === 'start') {
+          conversationId.value = event.conversation_id
+        } else if (event.type === 'response') {
+          playResponse(pendingIndex, event.content, event)
+        } else if (event.type === 'awaiting_confirmation') {
+          replacePending(pendingIndex, 'system', event.content || '该操作已提交人工确认，请稍候。', event)
+        } else if (event.type === 'identity_required') {
+          replacePending(pendingIndex, 'system', event.content || '请先完成客户身份验证。')
+          verifyOpen.value = true
+        } else if (event.type === 'access_denied') {
+          replacePending(pendingIndex, 'system', event.content || '无法访问该咨询内容。')
+        } else if (event.type === 'service_unavailable') {
+          replacePending(pendingIndex, 'system', event.content || '服务暂时不可用，请稍后再试。')
         }
       },
     )
-  } catch (e) {
-    clearTypeTimer()
-    messages.value.push({ role: 'system', content: '网络错误，请重试。' })
-    persistChat()
+  } catch (error) {
+    replacePending(pendingIndex, 'system', error.message || '网络错误，请重试。')
+    if ((error.message || '').includes('登录')) {
+      customerSession.logout()
+      verifyOpen.value = true
+    }
   } finally {
     sending.value = false
   }
@@ -171,34 +204,50 @@ async function useQuickIntent(intent) {
   await send()
 }
 
-watch(customerRef, persistChat)
+function logout() {
+  customerSession.logout()
+  startNewConsultation()
+}
 
-onMounted(() => {
-  loadServerMessages()
-  syncTimer = window.setInterval(loadServerMessages, 3000)
+onMounted(async () => {
+  clearLegacyCache()
+  customerSession.restore()
+  await initializeRecentConversation()
 })
 
 onUnmounted(() => {
-  if (syncTimer) window.clearInterval(syncTimer)
   clearTypeTimer()
 })
 </script>
 
 <template>
   <div class="chat-page">
-    <div class="chat-header">
+    <header class="chat-header">
       <div>
         <div class="service-title">智能售后客服</div>
         <div class="service-subtitle">订单、物流、退款与人工协同</div>
       </div>
       <div class="header-actions">
         <span class="status-pill" :class="`status-${sessionStatus.tone}`">{{ sessionStatus.label }}</span>
-        <el-input v-model="customerRef" size="small" class="customer-input" placeholder="手机号/标识" />
+        <button class="text-action" type="button" data-test="new-consultation" @click="startNewConsultation">新咨询</button>
+        <button class="text-action" type="button" data-test="history-open" @click="loadHistory">历史咨询</button>
+        <button
+          v-if="customerSession.isLoggedIn"
+          class="account-button"
+          type="button"
+          data-test="account-label"
+          @click="logout"
+        >
+          {{ customerSession.maskedPhone }}
+        </button>
+        <button v-else class="account-button" type="button" data-test="verify-open" @click="verifyOpen = true">
+          验证身份
+        </button>
       </div>
-    </div>
+    </header>
 
-    <div class="chat-shell">
-      <main class="chat-main">
+    <main class="chat-shell">
+      <section class="chat-main">
         <div class="quick-intents" aria-label="常用客服入口">
           <button
             v-for="intent in quickIntents"
@@ -219,68 +268,44 @@ onUnmounted(() => {
             <div class="empty-copy">可以直接描述订单、物流、退款或售后问题。</div>
           </div>
           <MessageBubble
-            v-for="(m, i) in messages"
-            :key="i"
-            :role="m.role"
-            :content="m.content"
-            :citations="m.citations || []"
-            :agent-trace="m.agent_trace || []"
+            v-for="(message, index) in messages"
+            :key="index"
+            :role="message.role"
+            :content="message.content"
+            :citations="message.citations || []"
+            :agent-trace="message.agent_trace || []"
           />
         </div>
 
-        <div class="chat-input">
-          <el-input
+        <form class="chat-input" @submit.prevent="send">
+          <textarea
             v-model="input"
-            type="textarea"
-            :rows="2"
+            class="message-input"
+            rows="2"
             placeholder="输入您的问题"
             @keydown.enter.prevent="send"
-          />
-          <el-button type="primary" :loading="sending" @click="send">发送</el-button>
-        </div>
-      </main>
+          ></textarea>
+          <button class="send-button" type="submit" :disabled="sending || !input.trim()">
+            {{ sending ? '发送中' : '发送' }}
+          </button>
+        </form>
+      </section>
+    </main>
 
-      <aside class="service-panel">
-        <section class="panel-section">
-          <div class="panel-title">服务上下文</div>
-          <div class="context-list">
-            <div v-for="item in contextItems" :key="item.label" class="context-item">
-              <span>{{ item.label }}</span>
-              <strong>{{ item.value }}</strong>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel-section status-card">
-          <div class="panel-title">当前进度</div>
-          <div class="progress-line">
-            <span class="progress-dot done"></span>
-            <span>识别问题</span>
-          </div>
-          <div class="progress-line">
-            <span class="progress-dot" :class="{ done: messages.length }"></span>
-            <span>检索依据</span>
-          </div>
-          <div class="progress-line">
-            <span class="progress-dot" :class="{ done: latestServiceMessage }"></span>
-            <span>生成答复</span>
-          </div>
-        </section>
-
-        <section class="panel-section" :class="{ muted: !latestTrace.length }">
-          <div class="panel-title">处理进度</div>
-          <div v-if="latestTrace.length" class="side-trace">
-            <div v-for="(step, i) in latestTrace" :key="i" class="side-trace-step">
-              <span>{{ i + 1 }}</span>
-              <div>
-                <p>{{ step.summary || step.action || '完成处理步骤' }}</p>
-              </div>
-            </div>
-          </div>
-          <div v-else class="panel-empty">等待用户描述问题</div>
-        </section>
-      </aside>
-    </div>
+    <CustomerVerifyDialog
+      v-model="verifyOpen"
+      :loading="verifyLoading"
+      :error="verifyError"
+      @verify="verifyCustomer"
+    />
+    <CustomerHistoryDrawer
+      v-model="historyOpen"
+      :conversations="conversations"
+      :loading="historyLoading"
+      :error="historyError"
+      @select="openConversation"
+      @retry="loadHistory"
+    />
   </div>
 </template>
 
@@ -289,48 +314,34 @@ onUnmounted(() => {
 .chat-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px 24px; border-bottom: 1px solid #e4e9f2; background: #fff; }
 .service-title { font-weight: 700; font-size: 17px; }
 .service-subtitle { margin-top: 2px; color: #667085; font-size: 12px; }
-.header-actions { display: flex; align-items: center; gap: 10px; }
-.customer-input { width: 168px; }
+.header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .status-pill { display: inline-flex; align-items: center; min-height: 26px; border-radius: 999px; padding: 2px 10px; font-size: 12px; font-weight: 700; border: 1px solid transparent; }
 .status-active, .status-idle { background: #e8f1ff; color: #1f6feb; border-color: #c9ddff; }
 .status-processing { background: #fff7e6; color: #a15c00; border-color: #f7d99a; }
 .status-attention { background: #fff1f0; color: #b42318; border-color: #f3b8b2; }
-.chat-shell { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; max-width: 1180px; height: calc(100dvh - 62px); margin: 0 auto; padding: 16px; }
-.chat-main, .service-panel { min-height: 0; }
-.chat-main { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; border: 1px solid #e4e9f2; border-radius: 8px; background: #fff; overflow: hidden; }
+.text-action, .account-button { border: 1px solid #d7deea; border-radius: 8px; padding: 6px 10px; background: #fff; color: #344054; cursor: pointer; font-size: 13px; }
+.text-action:hover, .account-button:hover { border-color: #1f6feb; color: #1f6feb; background: #f5f9ff; }
+.account-button { font-weight: 700; }
+.chat-shell { max-width: 920px; height: calc(100dvh - 62px); margin: 0 auto; padding: 16px; }
+.chat-main { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100%; border: 1px solid #e4e9f2; border-radius: 8px; background: #fff; overflow: hidden; }
 .quick-intents { display: flex; gap: 8px; overflow-x: auto; padding: 12px 14px; border-bottom: 1px solid #edf1f7; background: #fbfcfe; }
 .quick-intent { flex: 0 0 auto; border: 1px solid #d7deea; border-radius: 999px; padding: 6px 12px; background: #fff; color: #344054; cursor: pointer; font-size: 13px; }
 .quick-intent:hover:not(:disabled) { border-color: #1f6feb; color: #1f6feb; background: #f5f9ff; }
 .quick-intent:disabled { cursor: not-allowed; opacity: 0.55; }
-.chat-body { min-height: 0; overflow-y: auto; padding: 16px 18px; background: linear-gradient(#fff, #f8fafc); }
-.empty { display: grid; place-items: center; align-content: center; min-height: 260px; color: #667085; text-align: center; }
-.empty-title { color: #25324b; font-weight: 700; font-size: 18px; }
+.chat-body { min-height: 0; overflow-y: auto; padding: 18px; background: linear-gradient(#fff, #f8fafc); }
+.empty { display: grid; place-items: center; align-content: center; min-height: 280px; color: #667085; text-align: center; }
+.empty-title { color: #25324b; font-weight: 700; font-size: 20px; }
 .empty-copy { margin-top: 8px; font-size: 13px; }
-.chat-input { display: flex; gap: 10px; align-items: flex-end; padding: 12px 14px; border-top: 1px solid #e4e9f2; background: #fff; }
-.service-panel { display: grid; align-content: start; gap: 12px; overflow-y: auto; }
-.panel-section { border: 1px solid #e4e9f2; border-radius: 8px; padding: 14px; background: #fff; }
-.panel-section.muted { color: #667085; }
-.panel-title { margin-bottom: 12px; color: #25324b; font-weight: 700; font-size: 14px; }
-.context-list { display: grid; gap: 10px; }
-.context-item { display: flex; justify-content: space-between; gap: 12px; color: #667085; font-size: 13px; }
-.context-item strong { color: #25324b; text-align: right; font-weight: 700; }
-.status-card { background: #fbfcfe; }
-.progress-line { display: flex; align-items: center; gap: 8px; min-height: 28px; color: #475467; font-size: 13px; }
-.progress-dot { width: 9px; height: 9px; border-radius: 50%; background: #d0d5dd; }
-.progress-dot.done { background: #1f6feb; box-shadow: 0 0 0 4px #e8f1ff; }
-.side-trace { display: grid; gap: 10px; }
-.side-trace-step { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; }
-.side-trace-step > span { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: #e8f1ff; color: #1f6feb; font-size: 12px; font-weight: 700; }
-.side-trace-step p { margin: 2px 0 0; color: #667085; font-size: 12px; line-height: 1.45; }
-.panel-empty { color: #667085; font-size: 13px; }
+.chat-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; padding: 12px 14px; border-top: 1px solid #e4e9f2; background: #fff; }
+.message-input { width: 100%; resize: none; border: 1px solid #d7deea; border-radius: 8px; padding: 9px 10px; color: #25324b; font: inherit; line-height: 1.5; }
+.message-input:focus { outline: none; border-color: #1f6feb; box-shadow: 0 0 0 3px #e8f1ff; }
+.send-button { min-width: 76px; border: 1px solid #1f6feb; border-radius: 8px; padding: 9px 14px; background: #1f6feb; color: #fff; cursor: pointer; font-weight: 700; }
+.send-button:disabled { cursor: not-allowed; opacity: 0.6; }
 
-@media (max-width: 900px) {
+@media (max-width: 760px) {
   .chat-header { align-items: flex-start; padding: 12px 14px; }
-  .header-actions { align-items: flex-end; flex-direction: column; gap: 8px; }
-  .customer-input { width: 150px; }
-  .chat-shell { grid-template-columns: 1fr; height: auto; min-height: calc(100dvh - 62px); padding: 10px; }
-  .chat-main { min-height: calc(100dvh - 82px); }
-  .service-panel { grid-row: 1; grid-template-columns: 1fr; }
-  .panel-section:not(:first-child) { display: none; }
+  .chat-shell { height: calc(100dvh - 92px); padding: 10px; }
+  .chat-input { grid-template-columns: 1fr; }
+  .send-button { width: 100%; }
 }
 </style>
