@@ -13,6 +13,7 @@ from app.agent.routing import route_customer_message
 from app.conversation_activity import add_message
 from app.insights import analyze_sentiment, build_handoff_summary
 from app.models import Conversation, Message, PendingAction
+from app.errors import ToolError
 
 _EXECUTORS = {
     "apply_refund": lambda biz, p: biz.apply_refund(order_id=p["order_id"], amount=p["amount"], reason=p.get("reason", "")),
@@ -27,6 +28,57 @@ class ConversationService:
         self.graph = graph
         self.business = business
         self.registry = registry
+
+    def _authorize_customer_call(
+        self,
+        tool_name: str,
+        params: dict[str, Any],
+        customer_ref: str | None,
+    ) -> dict[str, Any] | None:
+        authorizer = getattr(self.registry, "authorize_customer_call", None)
+        if not callable(authorizer):
+            return ToolError(
+                "access_denied",
+                "客户作用域校验不可用",
+                {"authorization": True},
+            ).to_dict()
+        try:
+            return authorizer(tool_name, params, customer_ref=customer_ref)
+        except Exception:
+            return ToolError(
+                "access_denied",
+                "客户作用域校验失败",
+                {"authorization": True},
+            ).to_dict()
+
+    def _access_status(
+        self,
+        error: dict[str, Any],
+        customer_ref: str | None,
+    ) -> str:
+        if error.get("kind") in {"upstream_unavailable", "internal"}:
+            return "service_unavailable"
+        return "access_denied" if customer_ref else "identity_required"
+
+    def _tool_access_outcome(
+        self,
+        messages: list,
+        customer_ref: str | None,
+    ) -> dict[str, Any] | None:
+        for message in messages:
+            payload = self._decode_tool_payload(message)
+            if (
+                payload
+                and payload.get("error") is True
+                and (payload.get("details") or {}).get("authorization") is True
+            ):
+                return {
+                    "status": self._access_status(payload, customer_ref),
+                    "message": payload.get("message", "无法验证访问权限"),
+                    "citations": [],
+                    "agent_trace": [],
+                }
+        return None
 
     def _config(self, conversation_id: str) -> dict:
         return {"configurable": {"thread_id": conversation_id}}
@@ -276,19 +328,18 @@ class ConversationService:
         high_risk_request = self._explicit_high_risk_request(user_text)
         if high_risk_request:
             tool_name, params = high_risk_request
-            if self.registry:
-                denied = self.registry.authorize_customer_call(
-                    tool_name,
-                    params,
-                    customer_ref=verified_customer_id,
-                )
-                if denied:
-                    return {
-                        "status": "access_denied",
-                        "message": denied["message"],
-                        "agent_trace": [self._coordinator_trace(decision)],
-                        "citations": [],
-                    }
+            denied = self._authorize_customer_call(
+                tool_name,
+                params,
+                verified_customer_id,
+            )
+            if denied:
+                return {
+                    "status": self._access_status(denied, verified_customer_id),
+                    "message": denied["message"],
+                    "agent_trace": [self._coordinator_trace(decision)],
+                    "citations": [],
+                }
             out = self._pending_high_risk(
                 conversation_id, tool_name, params, customer_ref=verified_customer_id
             )
@@ -323,6 +374,14 @@ class ConversationService:
             out["agent_trace"] = [self._coordinator_trace(decision)]
             out["citations"] = []
             return out
+
+        access_outcome = self._tool_access_outcome(
+            result["messages"],
+            verified_customer_id,
+        )
+        if access_outcome:
+            access_outcome["agent_trace"] = [self._coordinator_trace(decision)]
+            return access_outcome
 
         tool_outcome = self._record_tool_insights(conversation_id, result["messages"])
         if tool_outcome:
@@ -375,14 +434,10 @@ class ConversationService:
             self.db.commit()
             return {"status": conv.status, "pending_status": pa.status, "message": ai_text}
         else:
-            denied = (
-                self.registry.authorize_customer_call(
-                    pa.tool_name,
-                    pa.params,
-                    customer_ref=pa.customer_ref,
-                )
-                if self.registry
-                else None
+            denied = self._authorize_customer_call(
+                pa.tool_name,
+                pa.params,
+                pa.customer_ref,
             )
             if denied:
                 pa.status = "failed"

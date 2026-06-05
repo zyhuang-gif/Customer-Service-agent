@@ -84,6 +84,18 @@ def test_chat_sse_returns_response(client):
     assert [event["type"] for event in _events(r)] == ["start", "response", "done"]
 
 
+def test_anonymous_body_customer_ref_cannot_pollute_customer_history(client, db_session):
+    response = client.post("/chat", json={"customer_ref": "C1001", "message": "你好"})
+
+    conversation_id = _events(response)[0]["conversation_id"]
+    conversation = db_session.get(Conversation, conversation_id)
+    history = client.get("/customer/conversations", headers=_customer_headers("C1001"))
+
+    assert conversation.customer_ref.startswith("anon-")
+    assert conversation.customer_ref != "C1001"
+    assert history.json() == []
+
+
 def test_customer_token_overrides_forged_body_customer_ref(client, db_session):
     response = client.post(
         "/chat",
@@ -424,20 +436,27 @@ class _EmptyRetriever:
 
 
 @pytest.mark.parametrize(
-    ("identity_verified", "customer_ref", "tool_name", "params"),
+    ("identity_verified", "customer_ref", "tool_name", "params", "expected_status"),
     [
-        (False, None, "get_order", {"order_id": "O-OWNED"}),
+        (False, None, "get_order", {"order_id": "O-OWNED"}, "identity_required"),
         (
             False,
             None,
             "apply_refund",
             {"order_id": "O-OWNED", "amount": 100.0, "reason": "test"},
+            "identity_required",
         ),
-        (True, "C1001", "get_logistics", {"order_id": "O-FOREIGN"}),
+        (
+            True,
+            "C1001",
+            "get_logistics",
+            {"order_id": "O-FOREIGN"},
+            "access_denied",
+        ),
     ],
 )
 def test_real_service_tool_boundary_denies_unscoped_personal_calls(
-    db_session, identity_verified, customer_ref, tool_name, params
+    db_session, identity_verified, customer_ref, tool_name, params, expected_status
 ):
     business = _BoundaryBusiness()
     registry = ToolRegistry(business=business, retriever=_EmptyRetriever())
@@ -463,7 +482,7 @@ def test_real_service_tool_boundary_denies_unscoped_personal_calls(
         verified_customer_id=customer_ref if identity_verified else None,
     )
 
-    assert out["status"] == "ai_handling"
+    assert out["status"] == expected_status
     assert business.personal_calls == []
     assert (
         db_session.query(PendingAction)
@@ -471,6 +490,64 @@ def test_real_service_tool_boundary_denies_unscoped_personal_calls(
         .count()
         == 0
     )
+
+
+@pytest.mark.parametrize(
+    ("customer_ref", "tool_name", "params", "expected_event"),
+    [
+        (None, "get_order", {"order_id": "O-OWNED"}, "identity_required"),
+        ("C1001", "get_order", {"order_id": "O-FOREIGN"}, "access_denied"),
+    ],
+)
+def test_chat_preserves_service_access_status_as_sse_event(
+    client, db_session, monkeypatch, customer_ref, tool_name, params, expected_event
+):
+    business = _BoundaryBusiness()
+    registry = ToolRegistry(business=business, retriever=_EmptyRetriever())
+    service = ConversationService(
+        db=db_session,
+        graph=build_graph(
+            llm=_ToolCallingLLM(tool_name, params),
+            registry=registry,
+            checkpointer=MemorySaver(),
+        ),
+        business=business,
+        registry=registry,
+    )
+    import app.routers.chat_router as chat_router
+
+    monkeypatch.setattr(chat_router, "build_service", lambda db: service)
+    headers = _customer_headers(customer_ref) if customer_ref else None
+
+    response = client.post(
+        "/chat",
+        headers=headers,
+        json={"customer_ref": "forged", "message": "普通问题"},
+    )
+
+    assert [event["type"] for event in _events(response)] == [
+        "start",
+        expected_event,
+        "done",
+    ]
+
+
+def test_chat_maps_service_unavailable_status_to_sse_event(client, monkeypatch):
+    class UnavailableService:
+        def start_turn(self, *args, **kwargs):
+            return {"status": "service_unavailable", "message": "暂时不可用"}
+
+    import app.routers.chat_router as chat_router
+
+    monkeypatch.setattr(chat_router, "build_service", lambda db: UnavailableService())
+
+    response = client.post("/chat", json={"customer_ref": "forged", "message": "普通问题"})
+
+    assert [event["type"] for event in _events(response)] == [
+        "start",
+        "service_unavailable",
+        "done",
+    ]
 
 
 def test_resume_action_rechecks_customer_scope_before_business_write(db_session):
@@ -512,6 +589,30 @@ def test_tool_authorization_converts_unexpected_order_check_error():
 
     assert out["error"] is True
     assert out["kind"] == "internal"
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "params"),
+    [
+        ("get_order", {}),
+        ("get_logistics", {"order_id": ""}),
+        ("get_refund_status", {"order_id": None}),
+        ("apply_refund", {"amount": 10.0}),
+        ("change_address", {"new_address": "上海"}),
+        ("get_customer", {}),
+        ("list_customer_tickets", {"customer_id": ""}),
+        ("issue_coupon", {"value": 10.0}),
+        ("create_ticket", {"category": "物流", "summary": "催办"}),
+        ("update_ticket", {"ticket_id": "TK1"}),
+    ],
+)
+def test_tool_authorization_rejects_missing_scope_parameters(tool_name, params):
+    registry = ToolRegistry(business=_BoundaryBusiness(), retriever=_EmptyRetriever())
+
+    out = registry.call(tool_name, params, customer_ref="C1001")
+
+    assert out["error"] is True
+    assert out["kind"] == "access_denied"
 
 
 @pytest.mark.parametrize(

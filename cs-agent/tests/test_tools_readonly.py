@@ -10,7 +10,7 @@ class FakeBusiness:
         if self.raise_unavailable:
             raise BusinessUnavailable("down")
         if order_id == "O1":
-            return {"id": "O1", "status": "已发货"}
+            return {"id": "O1", "customer_id": "C1", "status": "已发货"}
         return None
 
     def get_customer(self, customer_id):
@@ -39,27 +39,27 @@ def _registry(retriever_results=None):
 
 
 def test_get_order_found():
-    out = _registry().call("get_order", {"order_id": "O1"})
+    out = _registry().call("get_order", {"order_id": "O1"}, customer_ref="C1")
     assert out["status"] == "已发货"
 
 
 def test_get_order_not_found_returns_tool_error():
-    out = _registry().call("get_order", {"order_id": "NOPE"})
+    out = _registry().call("get_order", {"order_id": "NOPE"}, customer_ref="C1")
     assert out["error"] is True
-    assert out["kind"] == "not_found"
+    assert out["kind"] == "access_denied"
 
 
 def test_get_order_upstream_unavailable():
     reg = _registry()
     reg.business.raise_unavailable = True
-    out = reg.call("get_order", {"order_id": "O1"})
+    out = reg.call("get_order", {"order_id": "O1"}, customer_ref="C1")
     assert out["error"] is True
     assert out["kind"] == "upstream_unavailable"
 
 
 def test_search_knowledge_hit():
     reg = _registry(retriever_results=[{"title": "物流催办", "source": "x.md", "text": "...", "score": 0.9}])
-    out = reg.call("search_knowledge", {"query": "物流停了"})
+    out = reg.call("search_knowledge", {"query": "物流停了"}, customer_ref=None)
     assert out["covered"] is True
     assert len(out["hits"]) == 1
     assert out["hits"][0]["title"] == "物流催办"
@@ -67,14 +67,14 @@ def test_search_knowledge_hit():
 
 def test_search_knowledge_no_hit_marks_uncovered():
     reg = _registry(retriever_results=[])
-    out = reg.call("search_knowledge", {"query": "未知问题"})
+    out = reg.call("search_knowledge", {"query": "未知问题"}, customer_ref=None)
     assert out["covered"] is False
     assert out["hits"] == []
 
 
 def test_unknown_tool_returns_structured_error_not_raise():
     # LLM 幻觉出不存在的工具名时，应返回结构化错误而非抛异常
-    out = _registry().call("nonexistent_tool", {"foo": "bar"})
+    out = _registry().call("nonexistent_tool", {"foo": "bar"}, customer_ref=None)
     assert out["error"] is True
     assert out["kind"] == "bad_request"
     assert "nonexistent_tool" in out["message"]
@@ -86,6 +86,6 @@ def test_tool_internal_exception_returns_structured_error():
         def get_order(self, order_id):
             raise ValueError("boom")
     reg = ToolRegistry(business=BoomBusiness(), retriever=FakeRetriever([]))
-    out = reg.call("get_order", {"order_id": "O1"})
+    out = reg.call("get_order", {"order_id": "O1"}, customer_ref="C1")
     assert out["error"] is True
     assert out["kind"] == "internal"

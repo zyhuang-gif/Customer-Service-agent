@@ -26,7 +26,10 @@ class SpyRegistry:
     def __init__(self):
         self.called = []
 
-    def call(self, tool_name, params):
+    def authorize_customer_call(self, tool_name, params, *, customer_ref):
+        return None
+
+    def call(self, tool_name, params, *, customer_ref):
         self.called.append((tool_name, params))
         return {"ok": True}
 
@@ -84,3 +87,21 @@ def test_resume_with_approval_continues():
     final = graph.invoke(Command(resume={"approved": True, "result": {"refund_id": "RF1"}}), config=config)
     last = final["messages"][-1]
     assert "已为您处理" in last.content
+
+
+def test_high_risk_fails_closed_without_authorizing_registry():
+    graph = build_graph(llm=HighRiskLLM(), registry=None, checkpointer=MemorySaver())
+
+    result = graph.invoke(
+        {
+            "messages": [{"role": "user", "content": "给我退款"}],
+            "conversation_id": "conv-no-registry",
+            "customer_ref": "C1",
+            "intent": "",
+        },
+        config={"configurable": {"thread_id": "conv-no-registry"}},
+    )
+
+    assert "__interrupt__" not in result
+    tool_message = next(message for message in result["messages"] if message.type == "tool")
+    assert "access_denied" in tool_message.content

@@ -84,7 +84,7 @@ def chat(
                 conv_id,
             )
 
-    effective_customer_ref = customer_ref or body.customer_ref
+    effective_customer_ref = customer_ref or f"anon-{uuid.uuid4().hex}"
     if not conversation:
         db.add(
             Conversation(
@@ -106,6 +106,10 @@ def chat(
         if out["status"] == "awaiting_confirmation":
             yield _sse({"type": "awaiting_confirmation", "pending_action_id": out["pending_action_id"],
                         "content": out["message"], "citations": out.get("citations", []),
+                        "agent_trace": out.get("agent_trace", [])})
+        elif out["status"] in {"access_denied", "identity_required", "service_unavailable"}:
+            yield _sse({"type": out["status"], "content": out["message"],
+                        "citations": out.get("citations", []),
                         "agent_trace": out.get("agent_trace", [])})
         else:
             yield _sse({"type": "response", "content": out["message"],

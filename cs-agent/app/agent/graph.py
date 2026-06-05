@@ -8,6 +8,7 @@ from langgraph.types import interrupt
 from app.agent.routing import route_customer_message
 from app.agent.state import AgentState
 from app.agent.tools_bind import ALL_TOOLS
+from app.errors import ToolError
 from app.tools.risk import is_high_risk
 
 
@@ -24,6 +25,23 @@ SYSTEM_PROMPT = """你是电商售后客服 Agent。请优先使用工具查询�
 def build_graph(llm, registry, checkpointer, tool_specs=None):
     """llm: 可 bind_tools 的对象；registry: ToolRegistry；checkpointer。"""
     bound_llm = llm.bind_tools(tool_specs if tool_specs is not None else ALL_TOOLS)
+
+    def authorize(tool_name: str, params: dict, customer_ref: str | None) -> dict | None:
+        authorizer = getattr(registry, "authorize_customer_call", None)
+        if not callable(authorizer):
+            return ToolError(
+                "access_denied",
+                "客户作用域校验不可用",
+                {"authorization": True},
+            ).to_dict()
+        try:
+            return authorizer(tool_name, params, customer_ref=customer_ref)
+        except Exception:
+            return ToolError(
+                "access_denied",
+                "客户作用域校验失败",
+                {"authorization": True},
+            ).to_dict()
 
     def analyze(state: AgentState) -> dict:
         user_text = ""
@@ -53,14 +71,23 @@ def build_graph(llm, registry, checkpointer, tool_specs=None):
         last = state["messages"][-1]
         out_msgs = []
         for tc in last.tool_calls:
-            if hasattr(registry, "authorize_customer_call"):
-                result = registry.call(
-                    tc["name"],
-                    tc["args"],
-                    customer_ref=state.get("customer_ref"),
-                )
+            denied = authorize(tc["name"], tc["args"], state.get("customer_ref"))
+            if denied:
+                result = denied
             else:
-                result = registry.call(tc["name"], tc["args"])
+                caller = getattr(registry, "call", None)
+                if not callable(caller):
+                    result = ToolError(
+                        "access_denied",
+                        "客户作用域工具执行器不可用",
+                        {"authorization": True},
+                    ).to_dict()
+                else:
+                    result = caller(
+                        tc["name"],
+                        tc["args"],
+                        customer_ref=state.get("customer_ref"),
+                    )
             out_msgs.append(ToolMessage(content=str(result), tool_call_id=tc["id"], name=tc["name"]))
         return {"messages": out_msgs}
 
@@ -68,15 +95,7 @@ def build_graph(llm, registry, checkpointer, tool_specs=None):
         last = state["messages"][-1]
         for tc in last.tool_calls:
             if is_high_risk(tc["name"]):
-                denied = (
-                    registry.authorize_customer_call(
-                        tc["name"],
-                        tc["args"],
-                        customer_ref=state.get("customer_ref"),
-                    )
-                    if hasattr(registry, "authorize_customer_call")
-                    else None
-                )
+                denied = authorize(tc["name"], tc["args"], state.get("customer_ref"))
                 if denied:
                     return {
                         "messages": [

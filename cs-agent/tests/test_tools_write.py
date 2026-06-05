@@ -12,6 +12,9 @@ class FakeBusiness:
         self.created = dict(customer_id=customer_id, order_id=order_id, category=category, summary=summary, priority=priority)
         return {"id": "TK1", "status": "待处理", **self.created}
 
+    def get_order(self, order_id):
+        return {"id": order_id, "customer_id": "C1"} if order_id == "O1" else None
+
     def update_ticket(self, ticket_id, note=None, status=None, assignee=None):
         if ticket_id == "NOPE":
             return None
@@ -25,26 +28,27 @@ def _registry():
 
 def test_create_ticket_success():
     reg = _registry()
-    out = reg.call("create_ticket", {"customer_id": "C1", "order_id": "O1", "category": "物流", "summary": "催办", "priority": "高"})
+    out = reg.call("create_ticket", {"customer_id": "C1", "order_id": "O1", "category": "物流", "summary": "催办", "priority": "高"}, customer_ref="C1")
     assert out["id"] == "TK1"
     assert reg.business.created["category"] == "物流"
 
 
 def test_create_ticket_customer_not_found():
     reg = _registry()
-    out = reg.call("create_ticket", {"customer_id": "NOPE", "order_id": None, "category": "物流", "summary": "x", "priority": "中"})
+    out = reg.call("create_ticket", {"customer_id": "NOPE", "order_id": None, "category": "物流", "summary": "x", "priority": "中"}, customer_ref="NOPE")
     assert out["error"] is True
     assert out["kind"] == "not_found"
 
 
-def test_update_ticket_success():
+def test_update_ticket_is_denied_without_verifiable_scope():
     reg = _registry()
-    out = reg.call("update_ticket", {"ticket_id": "TK1", "status": "已解决", "note": "已处理"})
-    assert out["status"] == "已解决"
+    out = reg.call("update_ticket", {"ticket_id": "TK1", "status": "已解决", "note": "已处理"}, customer_ref="C1")
+    assert out["kind"] == "access_denied"
+    assert reg.business.updated is None
 
 
-def test_update_ticket_not_found():
+def test_update_ticket_missing_is_also_denied_without_verifiable_scope():
     reg = _registry()
-    out = reg.call("update_ticket", {"ticket_id": "NOPE", "status": "已解决"})
+    out = reg.call("update_ticket", {"ticket_id": "NOPE", "status": "已解决"}, customer_ref="C1")
     assert out["error"] is True
-    assert out["kind"] == "not_found"
+    assert out["kind"] == "access_denied"

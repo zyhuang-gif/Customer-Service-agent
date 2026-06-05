@@ -31,6 +31,9 @@ class FakeBusiness:
         self.refunded = {"order_id": order_id, "amount": amount}
         return {"id": "RF1", "order_id": order_id, "status": "处理中"}
 
+    def get_order(self, order_id):
+        return {"id": order_id, "customer_id": "C1"}
+
 
 class RaisingGraph:
     def invoke(self, state, config=None):
@@ -38,22 +41,35 @@ class RaisingGraph:
 
 
 class FakeRegistry:
-    def call(self, tool_name, params):
+    def authorize_customer_call(self, tool_name, params, *, customer_ref):
+        return None
+
+    def call(self, tool_name, params, *, customer_ref):
         return {"ok": True}
 
 
 def _service(db_session):
     biz = FakeBusiness()
     graph = build_graph(llm=HighRiskLLM(), registry=FakeRegistry(), checkpointer=MemorySaver())
-    return ConversationService(db=db_session, graph=graph, business=biz), biz
+    registry = FakeRegistry()
+    return ConversationService(db=db_session, graph=graph, business=biz, registry=registry), biz
 
 
 def test_explicit_refund_request_creates_pending_without_graph(db_session):
     db_session.add(Conversation(id="c1", customer_ref="x", status="ai_handling"))
     db_session.commit()
-    svc = ConversationService(db=db_session, graph=RaisingGraph(), business=FakeBusiness())
+    svc = ConversationService(
+        db=db_session,
+        graph=RaisingGraph(),
+        business=FakeBusiness(),
+        registry=FakeRegistry(),
+    )
 
-    out = svc.start_turn("c1", "我确认要申请退款，订单号 20260531002，退款金额 499 元。")
+    out = svc.start_turn(
+        "c1",
+        "我确认要申请退款，订单号 20260531002，退款金额 499 元。",
+        verified_customer_id="C1",
+    )
 
     assert out["status"] == "awaiting_confirmation"
     pa = db_session.query(PendingAction).filter_by(conversation_id="c1").one()
@@ -126,3 +142,40 @@ def test_resume_nonexistent_action_returns_not_found(db_session):
     svc, _ = _service(db_session)
     out = svc.resume_action(99999, approved=True, reviewer_id=1)
     assert out["status"] == "not_found"
+
+
+def test_explicit_high_risk_fails_closed_without_registry(db_session):
+    db_session.add(Conversation(id="c1", customer_ref="C1", status="ai_handling"))
+    db_session.commit()
+    svc = ConversationService(db=db_session, graph=RaisingGraph(), business=FakeBusiness())
+
+    out = svc.start_turn(
+        "c1",
+        "我要退款 ABC123 100元",
+        verified_customer_id="C1",
+    )
+
+    assert out["status"] == "access_denied"
+    assert db_session.query(PendingAction).count() == 0
+
+
+def test_resume_action_fails_closed_without_registry(db_session):
+    db_session.add(Conversation(id="c1", customer_ref="C1", status="ai_handling"))
+    db_session.add(
+        PendingAction(
+            conversation_id="c1",
+            customer_ref="C1",
+            tool_name="apply_refund",
+            params={"order_id": "O1", "amount": 99.0},
+            status="pending",
+        )
+    )
+    db_session.commit()
+    action = db_session.query(PendingAction).one()
+    business = FakeBusiness()
+    svc = ConversationService(db=db_session, graph=None, business=business)
+
+    out = svc.resume_action(action.id, approved=True, reviewer_id=1)
+
+    assert out["pending_status"] == "failed"
+    assert business.refunded is None
